@@ -1,0 +1,52 @@
+
+
+---
+
+### **Before Raising a PR**
+| Check | Description |
+|-------|------------|
+| ☐ Clear and Descriptive Branch Name | Use a meaningful branch name including Jira ticket reference (e.g., `feature/PROJ-123-add-login`) |
+| ☐ Prefix Branch with Category | Use appropriate prefixes like `feature/`, `bugfix/`, `hotfix/` to indicate purpose |
+| ☐ Avoid Generic Names | Do not use vague branch names like `fix`, `update`, `change` |
+| ☐ Meaningful Commit Messages | Write clear and concise commit messages with a short summary and additional details if necessary |
+| ☐ Follow Commit Message Pattern | Ensure commit messages follow a standard format and reference related issues |
+| ☐ Clear and Detailed PR Description | Provide a well-documented PR description with details, including CR references if applicable (e.g., RTL environment changes) |
+| ☐ Code Adheres to Coding Standards | Ensure code follows project coding guidelines and best practices |
+| ☐ Run Linting and Formatting | Ensure proper linting and formatting before pushing (use VSCode extensions if applicable) |
+| ☐ Appropriate Variable Descriptions and Comments | Variables and comments should be meaningful and relevant |
+| ☐ Avoid Code Smells & Maintainability Issues | Ensure code is clean and does not introduce technical debt |
+| ☐ Keep PR Scope Focused | PR should be limited to a single well-defined task; avoid mixing unrelated changes |
+| ☐ Write and Validate Tests | If applicable, write tests and ensure existing tests pass |
+| ☐ Request Review from 2 Reviewers | Send PR to designated code reviewers, requesting review instead of approval |
+
+---
+
+### **PR Reviewer 1**
+| Check | Description |
+|-------|------------|
+| ☐ Verify PR Metadata | Ensure PR title, description, and branch name follow agreed standards |
+| ☐ Understand PR Scope | Check if the Jira reference is correct and scope matches the ticket description |
+| ☐ Line-by-Line Code Review | Examine each line of code, including variable names and descriptions |
+| ☐ Ensure Code Standards and Best Practices | Look for issues like hardcoded sensitive values (e.g., passwords, API keys) |
+| ☐ Provide Constructive Feedback | Offer clear and actionable suggestions |
+| ☐ Request Changes if Needed | Use the "Request Changes" option when necessary |
+
+---
+
+### **PR Reviewer 2**
+| Check | Description |
+|-------|------------|
+| ☐ Ensure All Checks by Reviewer 1 are Covered | Verify all aspects reviewed by Reviewer 1 and address any missed issues |
+| ☐ Perform Final Code Review | Go through the main code and ensure quality before approval |
+
+---
+
+### **Legends (Descriptions for Each Step)**
+- **Branch Naming**: A clear branch name helps identify the purpose and track issues efficiently.
+- **Commit Messages**: Proper commit messages make it easier to understand changes in history.
+- **PR Description**: A well-documented PR description ensures transparency and helps reviewers grasp the purpose quickly.
+- **Code Quality**: Adhering to coding standards improves maintainability and readability.
+- **Testing**: Writing and verifying tests prevent unintended side effects.
+- **Code Review Process**: A structured review ensures code quality and security before merging into `main`.
+- **Two-Stage Review**: Having two reviewers ensures a 4-eye check, reducing the likelihood of errors slipping through.
+
