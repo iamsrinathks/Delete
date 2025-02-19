@@ -1,0 +1,39 @@
+#!/bin/bash
+set -euxo pipefail
+
+# Ensure Secure Boot is enabled
+SECURE_BOOT_STATUS=$(mokutil --sb-state || echo "Disabled")
+echo "Secure Boot Status: $SECURE_BOOT_STATUS"
+
+# Install dependencies
+sudo apt-get update
+sudo apt-get install -y dkms build-essential gcc make mokutil
+
+# Install NVIDIA drivers
+echo "Installing NVIDIA drivers..."
+sudo apt-get install -y nvidia-driver-535
+
+# If Secure Boot is enabled, sign the NVIDIA driver
+if [[ "$SECURE_BOOT_STATUS" == *"enabled"* ]]; then
+    echo "Secure Boot is enabled. Signing the NVIDIA driver..."
+    
+    # Generate a Machine Owner Key (MOK) if not already created
+    MOK_DIR="/var/lib/shim-signed/mok"
+    MOK_KEY="$MOK_DIR/MOK.priv"
+    MOK_CRT="$MOK_DIR/MOK.der"
+
+    sudo mkdir -p "$MOK_DIR"
+    sudo openssl req -new -x509 -newkey rsa:2048 -keyout "$MOK_KEY" -outform DER -out "$MOK_CRT" -nodes -days 36500 -subj "/CN=GPU Secure Boot/"
+    
+    # Enroll the key
+    sudo mokutil --import "$MOK_CRT" --root-pw
+    echo "Reboot required to enroll the MOK key."
+
+    # Sign NVIDIA drivers
+    for ko in $(find /lib/modules/$(uname -r)/kernel/drivers/video -name "*.ko"); do
+        sudo /usr/src/linux-headers-$(uname -r)/scripts/sign-file sha256 "$MOK_KEY" "$MOK_CRT" "$ko"
+    done
+fi
+
+echo "NVIDIA GPU setup complete. Rebooting system..."
+sudo reboot
