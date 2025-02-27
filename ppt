@@ -1,0 +1,97 @@
+Slide 1: Introduction to Pull Requests
+👉 Slide Summary:
+
+What is a PR?
+Why PRs are crucial for collaboration.
+🗣 Speaker Notes (Interactive Version):
+"Let’s start with a simple question: How many of you have submitted or reviewed a PR before? (Pause for responses)
+
+"For those who have, did you ever find a PR confusing or hard to review? What made it difficult? (Let a few people answer)"
+
+"A Pull Request, or PR, is a way to propose changes to the codebase while allowing others to review and provide feedback before merging. It’s like asking for a second opinion before making a big decision."
+
+"Now, why do you think good PRs are important? (Pause for responses)
+
+"That’s right! Well-structured PRs make reviews easier, prevent bugs, and improve collaboration. Without good PRs, we get messy code, missed issues, and frustrated developers!"
+
+---------------------------------------------------------------
+
+Slide 2: Best Practices Before Raising a PR
+👉 Slide Summary:
+
+Clear branch names.
+Meaningful commit messages.
+Running linting and tests.
+🗣 Speaker Notes (Interactive Version):
+"Before you submit a PR, let’s go through a quick checklist. What’s the first thing you should check? (Wait for answers: Branch name, commit message, formatting, etc.)"
+
+"Exactly! First, your branch name should be clear and descriptive. Instead of calling it ‘fix’ or ‘update,’ use something like feature/PROJ-123-add-login—this makes it easy to track changes."
+
+"Next, commit messages. Imagine reviewing a PR and seeing the message ‘Fixed it.’ Would you know what was fixed? (Wait for audience reaction—No!) That’s why commit messages should be detailed: ‘Fixed login issue by updating authentication flow.’ Much better, right?"
+
+"Lastly, before pushing your code, what should you run? (Wait for responses—Linting, Tests, etc.) Yes! Always run linting and tests to avoid breaking the build. Nobody wants to be the person who pushes broken code to production!"
+
+Slide 3: Effective Code Review Strategies
+👉 Slide Summary:
+
+Keeping PRs small and focused.
+Maintaining a collaborative tone.
+Using checklists.
+🗣 Speaker Notes (Interactive Version):
+"Imagine you receive a PR with 2,000 lines of code. How do you feel? (Wait for responses—frustrated, overwhelmed, etc.) Exactly! That’s why one of the best practices is to keep PRs small and focused."
+
+"Think about it—what’s easier? Reviewing 200 lines of code in 15 minutes or digging through 2,000 lines over an hour? (Wait for responses)
+
+"Next, let’s talk about feedback. Have you ever received a harsh or unclear code review? (Pause, let someone share.) How did it feel?"
+
+"Instead of saying ‘This is wrong,’ a better approach is, ‘Could we refactor this function to improve readability?’—much better, right?"
+
+"Finally, do you use a checklist when reviewing PRs? (Wait for hands.) If not, think about this: Would a pilot take off without a checklist? Probably not! Checklists help ensure we don’t miss security, readability, or logic issues."
+
+
+Slide 4: Roles and Responsibilities of PR Reviewers
+👉 Slide Summary:
+
+Reviewer 1’s responsibilities.
+Reviewer 2’s final review.
+Importance of constructive feedback.
+🗣 Speaker Notes (Interactive Version):
+"Let’s switch roles—you’re now the reviewer! Imagine you open a PR with vague descriptions, inconsistent formatting, and no tests. What would you do? (Wait for responses—request changes, ask for clarification, etc.)"
+
+"Exactly! The first reviewer checks the PR title, description, and does a detailed line-by-line review to catch issues early."
+
+"Now, what about the second reviewer? Should they just approve whatever the first reviewer did? (Pause for responses.) Nope! Their job is to double-check everything before approval, ensuring no issues were missed."
+
+"Let’s practice feedback. Suppose you see a hardcoded password in a PR—what do you say? A) ‘This is bad, fix it.’ B) ‘Consider using environment variables instead of hardcoding credentials.’ (Wait for responses)"
+
+"Correct! B is a constructive approach that guides the developer toward best practices instead of just criticizing."
+
+Slide 5: Conclusion & Key Takeaways
+👉 Slide Summary:
+
+Well-documented PRs matter.
+Code reviews improve quality.
+Constructive feedback builds strong teams.
+🗣 Speaker Notes (Interactive Version):
+"Alright, let’s wrap up! What’s one thing you learned today about PRs? (Wait for audience responses.)"
+
+"Yes! Well-documented PRs make life easier for everyone. Without proper descriptions and commit messages, even the best code can be misunderstood."
+
+"What’s one thing reviewers should always do? (Wait for responses.) Right! Provide constructive feedback instead of just pointing out mistakes. A strong feedback culture leads to better teamwork and higher code quality."
+
+"Final question: What’s one action you’ll take after this session to improve your PR process? (Encourage responses: better commit messages, smaller PRs, more feedback, etc.)"
+
+"Great answers! Remember, PRs are not just about code—they’re about collaboration, communication, and continuous improvement. Let’s commit to making our PRs clearer, cleaner, and more effective!"
+
+Slide 6: Quiz Time!
+👉 Slide Summary:
+
+Engaging the audience with questions.
+🗣 Speaker Notes (Interactive Version):
+"Alright, let’s test our knowledge with a quick quiz!
+
+"Awesome job! Let’s move on to best practices before submitting a PR."
+
+
+
+
