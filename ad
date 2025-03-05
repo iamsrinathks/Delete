@@ -1,0 +1,58 @@
+### **Problem Statement: Comparing Workbench VM-Based Instances vs. Workbench Custom Container-Based Instances**  
+
+The **Vertex AI Workbench instance** is a critical component of our **ML platform**, serving as the central technology for the **ML Route to Live**. It was chosen to provide **Jupyter Notebook functionality**, enabling **data scientists** to experiment with data, develop models in a **Python environment**, and seamlessly interact with other **Vertex AI services**.  
+
+However, as the platform evolves, there is a need to evaluate the most suitable deployment approach for Workbench instances. Currently, we are considering two options:  
+
+1. **Workbench VM-Based Instances** – Traditional deployment where Jupyter runs on a fully managed VM with pre-installed dependencies and GPU/CPU support.  
+2. **Workbench Custom Container-Based Instances** – A flexible approach where users define custom containers with specific dependencies, enabling portability and version control.  
+
+The key challenge is to determine which approach aligns best with our **scalability, maintainability, security, and performance** needs while minimizing operational overhead. The decision must consider factors such as **dependency management, reproducibility, integration with existing workflows, and support for diverse ML workloads**.  
+
+This **Architecture Decision Record (ADR)** aims to compare these two approaches, highlighting their trade-offs and recommending the most suitable option for our ML platform.
+
+
+
+### **Motivation**  
+
+As our **ML platform** continues to scale, ensuring a **robust, efficient, and scalable** environment for data scientists is crucial. The **Vertex AI Workbench** is at the core of our **ML Route to Live**, providing Jupyter Notebook functionality for experimentation, model development, and seamless interaction with other **Vertex AI services**.  
+
+While **Workbench VM-Based Instances** offer a managed, out-of-the-box solution, **Workbench Custom Container-Based Instances** provide greater flexibility in **dependency management, environment consistency, and portability**. The increasing complexity of ML workloads, diverse tooling requirements, and the need for **reproducibility across teams** necessitate an evaluation of these two approaches.  
+
+By making an informed **architecture decision**, we can:  
+
+- **Optimize Developer Experience** – Ensure data scientists have a smooth, consistent, and efficient environment to develop and deploy models.  
+- **Improve Maintainability** – Reduce operational overhead by choosing an approach that aligns with infrastructure best practices.  
+- **Enhance Reproducibility & Portability** – Enable seamless transitions between development, testing, and production environments.  
+- **Ensure Scalability & Security** – Select an approach that supports growing workloads while meeting compliance and security standards.  
+
+This evaluation will guide the platform’s future direction, ensuring we provide the **best environment** for ML development while balancing **flexibility, maintainability, and performance**.
+
+
+### **Assumptions**  
+
+1. **Vertex AI Workbench Remains the Core ML Development Environment**  
+   - The Workbench instance will continue to be the **primary** interface for data scientists to experiment with data, develop models, and interact with other **Vertex AI services**.  
+
+2. **Data Scientists Require a Flexible Yet Managed Environment**  
+   - Users need a **Python-based Jupyter Notebook** environment with the ability to **install and manage dependencies** while ensuring **consistency and reproducibility** across teams.  
+
+3. **Compute Resource Requirements Vary Based on Workload**  
+   - Some ML workloads may require **GPUs**, while others can run on **CPUs**. The decision should support dynamic resource allocation based on workload demands.  
+
+4. **Dependency Management is a Key Consideration**  
+   - Data scientists often rely on **custom libraries, ML frameworks, and environment configurations**, necessitating an approach that provides **controlled dependency management** without excessive overhead.  
+
+5. **Seamless Integration with Vertex AI Services is Required**  
+   - The selected approach must enable smooth **integration with Vertex AI Pipelines, Feature Store, Model Registry, and other managed services** to maintain a streamlined ML workflow.  
+
+6. **Security and Compliance Must be Maintained**  
+   - The solution should align with **security best practices**, ensuring **restricted access**, **identity management**, and **compliance with organizational policies**.  
+
+7. **Operational Overhead Should Be Minimized**  
+   - The decision should consider the **ease of maintenance**, reducing the burden on **platform and DevOps teams** while keeping infrastructure costs manageable.  
+
+8. **Collaboration and Sharing Capabilities are Important**  
+   - Teams should be able to **easily share notebooks, experiment results, and model artifacts**, ensuring smooth collaboration across projects.  
+
+This set of assumptions will serve as the foundation for evaluating **Workbench VM-Based Instances** versus **Workbench Custom Container-Based Instances**, ensuring the selected approach aligns with our **ML platform goals and operational requirements**.
