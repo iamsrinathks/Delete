@@ -1,58 +1,91 @@
-### **Problem Statement: Comparing Workbench VM-Based Instances vs. Workbench Custom Container-Based Instances**  
+### **Pros and Cons of Workbench VM-Based Instances vs. Workbench Custom Container-Based Instances**  
 
-The **Vertex AI Workbench instance** is a critical component of our **ML platform**, serving as the central technology for the **ML Route to Live**. It was chosen to provide **Jupyter Notebook functionality**, enabling **data scientists** to experiment with data, develop models in a **Python environment**, and seamlessly interact with other **Vertex AI services**.  
+---
 
-However, as the platform evolves, there is a need to evaluate the most suitable deployment approach for Workbench instances. Currently, we are considering two options:  
+### **1️⃣ Workbench VM-Based Instances**  
 
-1. **Workbench VM-Based Instances** – Traditional deployment where Jupyter runs on a fully managed VM with pre-installed dependencies and GPU/CPU support.  
-2. **Workbench Custom Container-Based Instances** – A flexible approach where users define custom containers with specific dependencies, enabling portability and version control.  
+✅ **Pros:**  
+1. **No Container Management Overhead**  
+   - No need to **build, maintain, and update** custom container images.  
+   - Avoids additional security vulnerability scanning and fixes (e.g., AquaSec).  
+   - No need to **ingest images into Google Artifact Registry (GAR)**.  
 
-The key challenge is to determine which approach aligns best with our **scalability, maintainability, security, and performance** needs while minimizing operational overhead. The decision must consider factors such as **dependency management, reproducibility, integration with existing workflows, and support for diverse ML workloads**.  
+2. **Supports Post-Startup Scripts**  
+   - The **`post-startup-script` metadata works as expected**, allowing for environment customization after instance creation.  
 
-This **Architecture Decision Record (ADR)** aims to compare these two approaches, highlighting their trade-offs and recommending the most suitable option for our ML platform.
+3. **Simplified GPU Driver Installation (without Secure Boot)**  
+   - GPU drivers can be installed directly **if Secure Boot is disabled**.  
+   - No need to build a container with pre-installed drivers.  
 
+4. **Fully Managed Environment**  
+   - Google provides **pre-installed dependencies** for ML workloads (e.g., TensorFlow, PyTorch).  
+   - Reduces setup time for data scientists.  
 
+5. **Tighter Integration with Vertex AI**  
+   - Out-of-the-box support for **Vertex AI integrations** without additional configuration.  
 
-### **Motivation**  
+🚫 **Cons:**  
+1. **GPU Drivers Cannot Be Installed with Secure Boot Enabled**  
+   - If **Secure Boot is enabled**, installing GPU drivers fails, limiting security best practices.  
 
-As our **ML platform** continues to scale, ensuring a **robust, efficient, and scalable** environment for data scientists is crucial. The **Vertex AI Workbench** is at the core of our **ML Route to Live**, providing Jupyter Notebook functionality for experimentation, model development, and seamless interaction with other **Vertex AI services**.  
+2. **Limited Customization for Development Tools**  
+   - Cannot **pre-install alternative IDEs** like VS Code within the same environment.  
+   - Limited flexibility for fine-tuning the ML environment.  
 
-While **Workbench VM-Based Instances** offer a managed, out-of-the-box solution, **Workbench Custom Container-Based Instances** provide greater flexibility in **dependency management, environment consistency, and portability**. The increasing complexity of ML workloads, diverse tooling requirements, and the need for **reproducibility across teams** necessitate an evaluation of these two approaches.  
+3. **Inconsistent Dependency Management**  
+   - Relies on Google’s pre-installed libraries, which may not always match project requirements.  
+   - No built-in versioning for dependencies like in custom containers.  
 
-By making an informed **architecture decision**, we can:  
+---
 
-- **Optimize Developer Experience** – Ensure data scientists have a smooth, consistent, and efficient environment to develop and deploy models.  
-- **Improve Maintainability** – Reduce operational overhead by choosing an approach that aligns with infrastructure best practices.  
-- **Enhance Reproducibility & Portability** – Enable seamless transitions between development, testing, and production environments.  
-- **Ensure Scalability & Security** – Select an approach that supports growing workloads while meeting compliance and security standards.  
+### **2️⃣ Workbench Custom Container-Based Instances**  
 
-This evaluation will guide the platform’s future direction, ensuring we provide the **best environment** for ML development while balancing **flexibility, maintainability, and performance**.
+✅ **Pros:**  
+1. **Secure Boot Compatible with GPU Drivers**  
+   - GPU drivers can be pre-installed in the container, ensuring compatibility with **Secure Boot enabled** instances.  
 
+2. **Complete Control Over Environment**  
+   - Can **pre-install VS Code or other IDEs** inside the container, unlike VM-based instances.  
+   - Full flexibility to define dependencies (specific versions of TensorFlow, PyTorch, CUDA, etc.).  
 
-### **Assumptions**  
+3. **Better Portability & Reproducibility**  
+   - The container can be **reused across different environments**, ensuring consistency.  
+   - Easier to share the same setup across different teams or cloud projects.  
 
-1. **Vertex AI Workbench Remains the Core ML Development Environment**  
-   - The Workbench instance will continue to be the **primary** interface for data scientists to experiment with data, develop models, and interact with other **Vertex AI services**.  
+🚫 **Cons:**  
+1. **Additional Container Management Overhead**  
+   - Custom containers need to be **ingested into Google Artifact Registry (GAR)**.  
+   - Each new Google base image requires **scanning, patching vulnerabilities (e.g., AquaSec), and re-deploying**.  
+   - Extra DevOps effort for maintaining **container image updates**.  
 
-2. **Data Scientists Require a Flexible Yet Managed Environment**  
-   - Users need a **Python-based Jupyter Notebook** environment with the ability to **install and manage dependencies** while ensuring **consistency and reproducibility** across teams.  
+2. **Post-Startup Script Metadata Does Not Work**  
+   - Unlike VM-based instances, **`post-startup-script` metadata is ignored**, requiring alternative initialization methods.  
 
-3. **Compute Resource Requirements Vary Based on Workload**  
-   - Some ML workloads may require **GPUs**, while others can run on **CPUs**. The decision should support dynamic resource allocation based on workload demands.  
+3. **Potential Latency in Startup**  
+   - Custom container startup times may be slightly longer due to the image pull process from GAR.  
 
-4. **Dependency Management is a Key Consideration**  
-   - Data scientists often rely on **custom libraries, ML frameworks, and environment configurations**, necessitating an approach that provides **controlled dependency management** without excessive overhead.  
+4. **Complexity in Debugging**  
+   - Any issue related to the container **must be debugged at the container level**, adding an additional layer of troubleshooting.  
 
-5. **Seamless Integration with Vertex AI Services is Required**  
-   - The selected approach must enable smooth **integration with Vertex AI Pipelines, Feature Store, Model Registry, and other managed services** to maintain a streamlined ML workflow.  
+---
 
-6. **Security and Compliance Must be Maintained**  
-   - The solution should align with **security best practices**, ensuring **restricted access**, **identity management**, and **compliance with organizational policies**.  
+### **Summary Table**  
 
-7. **Operational Overhead Should Be Minimized**  
-   - The decision should consider the **ease of maintenance**, reducing the burden on **platform and DevOps teams** while keeping infrastructure costs manageable.  
+| Feature | Workbench VM-Based Instances | Workbench Custom Container-Based Instances |
+|---------|------------------------------|--------------------------------------------|
+| **GPU Drivers with Secure Boot** | ❌ Not Supported | ✅ Supported |
+| **Post-Startup Script Support** | ✅ Works | ❌ Does Not Work |
+| **Need for Container Management** | ✅ No Overhead | ❌ Requires Image Management, GAR Ingestion, and Security Scanning |
+| **Custom IDE (e.g., VS Code) Integration** | ❌ Not Possible | ✅ Can be Pre-Installed in the Image |
+| **Dependency Management** | ❌ Limited to Pre-Installed Libraries | ✅ Fully Customizable |
+| **Portability & Reproducibility** | ❌ Limited | ✅ High (Reproducible Environment) |
+| **Vertex AI Integration** | ✅ Seamless | ✅ Requires Configuration |
+| **Security Overhead** | ✅ Lower | ❌ Higher (Vulnerability Scanning & Updates) |
 
-8. **Collaboration and Sharing Capabilities are Important**  
-   - Teams should be able to **easily share notebooks, experiment results, and model artifacts**, ensuring smooth collaboration across projects.  
+---
 
-This set of assumptions will serve as the foundation for evaluating **Workbench VM-Based Instances** versus **Workbench Custom Container-Based Instances**, ensuring the selected approach aligns with our **ML platform goals and operational requirements**.
+### **Final Thoughts**  
+- **If ease of use and minimal maintenance is a priority**, **VM-based instances** are preferable.  
+- **If flexibility, Secure Boot support, and custom environments are required**, **custom containers** are the better choice.  
+
+Would you like me to include any additional considerations (e.g., cost, scalability, or compliance factors)? 🚀
