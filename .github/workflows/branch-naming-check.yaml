@@ -1,0 +1,27 @@
+name: Enforce Branch Naming Convention
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  check-branch-name:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get Branch Name
+        run: echo "BRANCH_NAME=${{ github.event.pull_request.head.ref }}" >> $GITHUB_ENV
+
+      - name: Validate Branch Name
+        run: |
+          allowed_pattern="^(feature|bugfix|hotfix|chore|release)/[A-Z]{2,10}-[0-9]+[-a-z0-9]*$"
+
+          if [[ ! "${BRANCH_NAME}" =~ $allowed_pattern ]]; then
+            echo "❌ Branch name '${BRANCH_NAME}' is invalid!"
+            echo "✅ Expected format: feature/ABC-1234-description or bugfix/ENG-567-fix-typo"
+            exit 1
+          fi
+
+      - name: Success Message
+        if: success()
+        run: echo "✅ Branch name '${BRANCH_NAME}' follows the correct pattern!"
