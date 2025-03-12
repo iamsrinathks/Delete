@@ -1,0 +1,48 @@
+name: PR Compliance Checks
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  check-pr-title:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate PR Title Follows Semantic Format
+        run: |
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          if ! [[ "$PR_TITLE" =~ ^(fix|feat|chore|revert)(\(.+\))?!?:\ [A-Z]{2,10}-[0-9]+ ]]; then
+            echo "❌ PR title does not follow semantic PR format with a Jira ticket!"
+            exit 1
+          fi
+        shell: bash
+
+  check-commits:
+    runs-on: ubuntu-latest
+    needs: check-pr-title  # Ensures this runs after PR title check
+
+    steps:
+      - name: Get All Commits in PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          commits=$(gh pr view ${{ github.event.pull_request.number }} --json commits --jq '.commits.[].message')
+          echo "$commits" > commit_messages.txt
+
+      - name: Validate Commit Messages with Jira Ticket
+        run: |
+          allowed_pattern="^(fix|feat|chore|revert)(\(.+\))?!?:\ [A-Z]{2,10}-[0-9]+ .+"
+          invalid_commits=0
+
+          while IFS= read -r line; do
+            if ! [[ "$line" =~ $allowed_pattern ]]; then
+              echo "❌ Invalid commit message: $line"
+              invalid_commits=1
+            fi
+          done < commit_messages.txt
+
+          if [[ $invalid_commits -eq 1 ]]; then
+            echo "🚨 Some commits do not follow the semantic commit pattern with a Jira ticket!"
+            exit 1
+          fi
