@@ -1,91 +1,41 @@
-### **Pros and Cons of Workbench VM-Based Instances vs. Workbench Custom Container-Based Instances**  
+Imagine you live in a gated community where each resident has access to specific facilities (like the gym, swimming pool, or clubhouse). Traditionally, residents were given physical keys to enter these facilities.
+However, keys have problems:
+* Keys can be stolen or lost (Security Risk ❌).
+* Making a new key every time someone moves in/out is hard (Manual Effort ❌).
+* If someone leaves but keeps the key, they still have access (Access Management Issue ❌).
+💡 The Solution? Smart Cards (OIDC-based Authentication)!
+* Each resident gets a digital ID (like a Smart Card 🔑).
+* When they want to enter a facility, the system checks their identity dynamically.
+* No need to carry or store keys!
+This is exactly what OIDC (OpenID Connect) and Workload Identity Federation (WIF) do for GCP authentication in Harness.
+Instead of storing long-lived service account keys (physical keys), we issue temporary access dynamically using OIDC (Smart Cards). This improves security, automation, and compliance.
 
----
+JOSE header(metadata bout the type go , JWS Payload and JWS Signature 
 
-### **1️⃣ Workbench VM-Based Instances**  
+🔷 OIDC & Workload Identity Federation (WIF) in Less than 10 Points
+1️⃣ Problem with Service Account Keys → Traditional authentication uses long-lived keys, which can be leaked, hard to manage, and a security risk.
 
-✅ **Pros:**  
-1. **No Container Management Overhead**  
-   - No need to **build, maintain, and update** custom container images.  
-   - Avoids additional security vulnerability scanning and fixes (e.g., AquaSec).  
-   - No need to **ingest images into Google Artifact Registry (GAR)**.  
+2️⃣ Solution: Workload Identity Federation (WIF) → Allows external workloads (Harness, AWS, GitHub, etc.) to authenticate securely without storing keys.
 
-2. **Supports Post-Startup Scripts**  
-   - The **`post-startup-script` metadata works as expected**, allowing for environment customization after instance creation.  
+3️⃣ What is OIDC? → OpenID Connect (OIDC) is an identity authentication protocol built on OAuth 2.0. that issues JWTs (identity tokens) to verify workloads.
 
-3. **Simplified GPU Driver Installation (without Secure Boot)**  
-   - GPU drivers can be installed directly **if Secure Boot is disabled**.  
-   - No need to build a container with pre-installed drivers.  
+4️⃣ How OIDC Works in WIF? → External workloads request an OIDC token (JWT) from their Identity Provider (IdP) and send it to GCP’s Security Token Service (STS) for verification.
 
-4. **Fully Managed Environment**  
-   - Google provides **pre-installed dependencies** for ML workloads (e.g., TensorFlow, PyTorch).  
-   - Reduces setup time for data scientists.  
+5️⃣ What is Workload Identity Pool? → A logical grouping of external identities that need access to GCP (e.g., Dev, Staging, Production environments).
 
-5. **Tighter Integration with Vertex AI**  
-   - Out-of-the-box support for **Vertex AI integrations** without additional configuration.  
+6️⃣ What is a Workload Identity Pool Provider? → A bridge between GCP and an external IdP (AWS, GitHub, Okta, etc.), which validates identity claims before granting access.
 
-🚫 **Cons:**  
-1. **GPU Drivers Cannot Be Installed with Secure Boot Enabled**  
-   - If **Secure Boot is enabled**, installing GPU drivers fails, limiting security best practices.  
+7️⃣ How Access Tokens are Issued? → GCP exchanges the verified JWT for a short-lived OAuth 2.0 access token, which is then used to interact with GCP services.
 
-2. **Limited Customization for Development Tools**  
-   - Cannot **pre-install alternative IDEs** like VS Code within the same environment.  
-   - Limited flexibility for fine-tuning the ML environment.  
+8️⃣ Why Attribute Mapping? → Defines how external IdP attributes (like username, groups) map to GCP IAM roles for access control (e.g., google.subject=assertion.sub).
 
-3. **Inconsistent Dependency Management**  
-   - Relies on Google’s pre-installed libraries, which may not always match project requirements.  
-   - No built-in versioning for dependencies like in custom containers.  
+9️⃣ Key Benefits → No static credentials, automatic token rotation, enhanced security, and seamless integration with IAM across multiple IdPs.
 
----
+🔟 Final Outcome → External workloads can authenticate dynamically using OIDC, access GCP services securely, and eliminate the need for service account keys.
+🚀 Would you like a Terraform automation script for this setup?
 
-### **2️⃣ Workbench Custom Container-Based Instances**  
 
-✅ **Pros:**  
-1. **Secure Boot Compatible with GPU Drivers**  
-   - GPU drivers can be pre-installed in the container, ensuring compatibility with **Secure Boot enabled** instances.  
-
-2. **Complete Control Over Environment**  
-   - Can **pre-install VS Code or other IDEs** inside the container, unlike VM-based instances.  
-   - Full flexibility to define dependencies (specific versions of TensorFlow, PyTorch, CUDA, etc.).  
-
-3. **Better Portability & Reproducibility**  
-   - The container can be **reused across different environments**, ensuring consistency.  
-   - Easier to share the same setup across different teams or cloud projects.  
-
-🚫 **Cons:**  
-1. **Additional Container Management Overhead**  
-   - Custom containers need to be **ingested into Google Artifact Registry (GAR)**.  
-   - Each new Google base image requires **scanning, patching vulnerabilities (e.g., AquaSec), and re-deploying**.  
-   - Extra DevOps effort for maintaining **container image updates**.  
-
-2. **Post-Startup Script Metadata Does Not Work**  
-   - Unlike VM-based instances, **`post-startup-script` metadata is ignored**, requiring alternative initialization methods.  
-
-3. **Potential Latency in Startup**  
-   - Custom container startup times may be slightly longer due to the image pull process from GAR.  
-
-4. **Complexity in Debugging**  
-   - Any issue related to the container **must be debugged at the container level**, adding an additional layer of troubleshooting.  
-
----
-
-### **Summary Table**  
-
-| Feature | Workbench VM-Based Instances | Workbench Custom Container-Based Instances |
-|---------|------------------------------|--------------------------------------------|
-| **GPU Drivers with Secure Boot** | ❌ Not Supported | ✅ Supported |
-| **Post-Startup Script Support** | ✅ Works | ❌ Does Not Work |
-| **Need for Container Management** | ✅ No Overhead | ❌ Requires Image Management, GAR Ingestion, and Security Scanning |
-| **Custom IDE (e.g., VS Code) Integration** | ❌ Not Possible | ✅ Can be Pre-Installed in the Image |
-| **Dependency Management** | ❌ Limited to Pre-Installed Libraries | ✅ Fully Customizable |
-| **Portability & Reproducibility** | ❌ Limited | ✅ High (Reproducible Environment) |
-| **Vertex AI Integration** | ✅ Seamless | ✅ Requires Configuration |
-| **Security Overhead** | ✅ Lower | ❌ Higher (Vulnerability Scanning & Updates) |
-
----
-
-### **Final Thoughts**  
-- **If ease of use and minimal maintenance is a priority**, **VM-based instances** are preferable.  
-- **If flexibility, Secure Boot support, and custom environments are required**, **custom containers** are the better choice.  
-
-Would you like me to include any additional considerations (e.g., cost, scalability, or compliance factors)? 🚀
+Pipeline runs in Harness → Harness generates an OIDC token (JWT).
+2️⃣ JWT sent to GCP STS → STS validates it against the Workload Identity Pool Provider.
+3️⃣ STS issues an OAuth 2.0 Access Token → Valid for short duration (e.g., 1 hour).
+4️⃣ Pipeline uses the Access Token to interact with Vertex AI, GCS, DataFusion, etc..
