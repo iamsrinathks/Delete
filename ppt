@@ -27,3 +27,87 @@ if not conventional_commit_regex.match(commit_message):
     sys.exit(1)
 
 sys.exit(0)
+
+
+
+# Enforcing Conventional Commit Messages with Pre-Commit Hooks
+
+## Introduction
+
+Ensuring that commit messages adhere to a consistent format is crucial for maintaining a clean and understandable project history. One effective way to enforce this is by using pre-commit hooks that validate commit messages against a defined standard, such as [Conventional Commits](https://www.conventionalcommits.org/). This approach helps in automating the enforcement of commit message conventions, providing immediate feedback to developers, and maintaining a standardized commit history.
+
+## Importance of Enforcing Conventional Commit Messages
+
+- **Consistency:** Standardized commit messages make it easier for team members to understand the history and purpose of changes.
+- **Automation:** Tools can automatically generate changelogs and determine version bumps based on commit messages following a conventional format.
+- **Collaboration:** Clear commit messages facilitate better collaboration among team members by providing context and rationale for changes.
+
+## Setting Up Pre-Commit Hooks to Enforce Commit Message Standards
+
+To implement pre-commit hooks that validate commit messages, follow these steps:
+
+1. **Install Pre-Commit:**
+
+   Ensure that the `pre-commit` package is installed in your development environment. This tool manages and maintains multi-language pre-commit hooks.
+
+   ```bash
+   pip install pre-commit
+   ```
+
+
+2. **Create a Pre-Commit Configuration File:**
+
+   In the root directory of your repository, create a file named `.pre-commit-config.yaml`. This file will define the hooks to be used.
+
+   ```bash
+   touch .pre-commit-config.yaml
+   ```
+
+
+3. **Add Hook Configuration:**
+
+   Populate the `.pre-commit-config.yaml` file with the following content to set up a hook that checks commit messages against the Conventional Commits standard:
+
+   ```yaml
+   repos:
+     - repo: https://github.com/compilerla/conventional-pre-commit
+       rev: v1.0.0  # Use the appropriate version tag
+       hooks:
+         - id: conventional-pre-commit
+           stages: [commit-msg]
+           args: []
+   ```
+
+
+   Replace `v1.0.0` with the desired version of the `conventional-pre-commit` hook. You can find the latest version tags on the [GitHub repository](https://github.com/compilerla/conventional-pre-commit).
+
+4. **Install the Pre-Commit Hook:**
+
+   Install the defined pre-commit hooks by running:
+
+   ```bash
+   pre-commit install --hook-type commit-msg
+
+   ```
+
+
+   This command sets up the specified hooks and ensures they are active in your repository.
+
+5. **Verify the Hook Installation:**
+
+   Make a commit to test the hook:
+
+   ```bash
+   git commit -m "test: validate commit message hook"
+   ```
+
+
+   If the commit message does not adhere to the Conventional Commits format, the hook will prevent the commit and display an error message.
+
+## Additional Resources
+
+- [Conventional Commits Specification](https://www.conventionalcommits.org/)
+- [compilerla/conventional-pre-commit GitHub Repository](https://github.com/compilerla/conventional-pre-commit)
+- [Enforcing Conventional Commits using Git hooks](https://dev.to/craicoverflow/enforcing-conventional-commits-using-git-hooks-1o5p)
+
+By implementing these steps, you can ensure that all commit messages in your repository follow a standardized format, enhancing the clarity and consistency of your project's history.
