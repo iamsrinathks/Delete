@@ -1,0 +1,51 @@
+# App RTL Project Structure
+
+## Overview
+
+Any application development initiative that adheres to the standard SDLC can benefit from deployment within the App RTL framework. This encompasses a wide range of products and services, including but not limited to:
+
+The App RTL Project Structure is designed to optimize the utilization of Google Cloud Platform (GCP) resources for testing purposes across three teams: A, B, and C. By provisioning GCP projects via Backstage and implementing a structured allocation strategy, we aim to enhance resource management, ensure efficient testing workflows, and maintain control over network configurations.
+
+## Project Allocation Strategy
+
+To effectively manage the deployment limit of 25 projects per template, the following allocation has been proposed:
+
+- **Team-Specific Projects:**
+  - **Development (Dev):** Each team (A, B, and C) is allocated 5 projects, totaling 15 projects.
+  - **Pre-Production (Pre):** Each team is allocated 2 projects, totaling 6 projects.
+
+- **Networking Host Projects:**
+  - **Host Projects:** 1 project per environment (Dev and Pre) dedicated to networking, where subnets and firewall rules will be managed, totaling 2 projects.
+
+- **Idle Projects:**
+  - **Reserve:** 2 projects remain idle and can be utilized by any team as needed, especially when awaiting the cleanup of resources in their allocated projects.
+
+This allocation sums up to 25 projects, aligning with the current deployment limit.
+
+## Networking and Subnet Management
+
+Effective subnet management is crucial to prevent IP address conflicts and ensure seamless communication between resources. To achieve this:
+
+- **Centralized Control:** The dedicated networking host projects will centrally manage subnets and firewall rules, providing a unified approach to network configuration.
+
+- **Subnet Allocation:** Each team's projects will be assigned specific subnet ranges to avoid overlaps. This structured allocation facilitates better control and predictability of network resources.
+
+Implementing a centralized networking model, such as Google's Shared VPC, allows multiple projects to connect to a common VPC network, enhancing security and efficiency. citeturn0search3
+
+## Roles and Responsibilities
+
+- **Project Ownership:** Each project will have an assigned owner responsible for overseeing resource provisioning, usage, and cleanup within their respective projects.
+
+- **Resource Cleanup:** Given the testing nature of these projects, it's imperative to clean up resources post-testing to free up capacity for future tests.
+
+## Importance of This Approach
+
+- **Resource Optimization:** By allocating a fixed number of projects per team and environment, we ensure optimal utilization of available GCP projects within the deployment limits.
+
+- **Network Consistency:** Centralized subnet and firewall management prevent IP conflicts and promote a consistent networking environment across all projects.
+
+- **Scalability and Flexibility:** The reserve of idle projects provides flexibility, allowing teams to continue testing without delays during resource cleanup periods.
+
+- **Accountability:** Assigning project owners fosters responsibility and ensures that resources are managed effectively, aligning with best practices for resource hierarchy and management in GCP. citeturn0search2
+
+By implementing this structured approach, we can enhance our testing workflows, maintain control over our GCP resources, and ensure a streamlined, efficient process for all teams involved. 
