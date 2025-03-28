@@ -184,9 +184,34 @@ def export_model():
 
     print("✅ Model export initiated successfully." if response else "❌ Failed to export model.")
 
+
+# --------------------------------
+# Delete a Specific Model Version
+# --------------------------------
+def delete_model_version():
+    """
+    Deletes a specific model version from Vertex AI.
+    """
+    project, region, model_id = os.getenv("GCP_PROJECT"), os.getenv("GCP_REGION"), os.getenv("MODEL_ID")
+
+    if not project or not region or not model_id:
+        raise ValueError("❌ Missing required environment variables.")
+
+    api_endpoint = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/models/{model_id}"
+
+    print("🗑️ Deleting model version...")
+    response = run_curl("DELETE", api_endpoint)
+    
+    if response:
+        print(f"✅ Model version deleted successfully: {response}")
+    else:
+        print("❌ Failed to delete model version.")
+
 def delete_model():
     """Deletes an entire model (all versions)."""
     project, region, model_id = os.getenv("GCP_PROJECT"), os.getenv("GCP_REGION"), os.getenv("MODEL_ID")
+    if not project or not region or not model_id:
+        raise ValueError("❌ Missing required environment variables.")
     api_endpoint = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/models/{model_id}:delete"
 
     response = run_curl("DELETE", api_endpoint)
@@ -195,9 +220,7 @@ def delete_model():
 
 def set_model_iam_policy():
     """Sets IAM policy for the registered model in Vertex AI."""
-    project = os.getenv("GCP_PROJECT")
-    region = os.getenv("GCP_REGION")
-    model_id = os.getenv("MODEL_ID")  # User can provide this manually
+    project, region, model_id = os.getenv("GCP_PROJECT"), os.getenv("GCP_REGION"), os.getenv("MODEL_ID")
     iam_role = os.getenv("IAM_ROLE")
     iam_members = os.getenv("IAM_MEMBERS")
 
