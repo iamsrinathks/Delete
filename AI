@@ -1,0 +1,49 @@
+**MVP Readiness Overview: Automated Jenkins-to-Harness Migration**
+
+---
+
+## 1. Input Scope  
+- **Primary Artifact:** A single, well-formed Jenkinsfile (Declarative or Scripted).  
+- **Contextual Constraint:** Reference to one Harness Golden Template variant.  
+  > *MVP Boundaries:* Only core pipeline stages (checkout, build, test, deploy) and minimal plugin usage.  
+
+---
+
+## 2. Agent-Driven Migration Flow  
+
+1. **Jenkinsfile Parsing**  
+   - **Tool:** AI Migration Agent  
+   - **Action:** Ingests the Jenkinsfile, extracts stages, steps, environment settings, and credentials blocks.  
+
+2. **Template Alignment & Mapping**  
+   - **Tool:** AI Migration Agent with RAG capability  
+   - **Action:** Matches Jenkins constructs to the specified Golden Template’s building blocks—mapping stages to Harness workflows, steps to Harness steps, and environment variables to Harness variables.  
+   - **Outcome:** A normalized, in-memory representation of the Jenkins logic, annotated with mapping metadata for traceability and continuous refinement.  
+
+3. **Harness YAML Generation & Schema Validation**  
+   - **Tool:** AI Migration Agent  
+   - **Action:** Emits a Harness pipeline YAML, then validates it against the Harness schema—identifying structural errors and recommending fixes.  
+
+4. **Output Delivery**  
+   - **Artifact:** Validated Harness YAML file  
+   - **Supplemental:** Transformation log summarizing mappings, warnings, and agent recommendations.  
+
+---
+
+## 3. Pending Readiness Considerations  
+- **Tooling Decisions:** Finalize the parsing library (e.g., Jenkins Pipeline Unit) and RAG framework (e.g., LangChain).  
+- **Memory Strategy:** Determine persistence mechanism for mapping “memories” to accelerate subsequent migrations.  
+- **Provisioning Scope:** Clarify which migration steps require full agent automation versus lightweight scripts or manual review.  
+- **Continuous Improvement:** Establish feedback loop—capture agent performance metrics (accuracy, mapping coverage) to iteratively enhance mapping rules.  
+
+---
+
+## 4. Business Value & Next Steps  
+- **Efficiency Gains:** Slash migration effort by automating repetitive translation tasks.  
+- **Consistency & Compliance:** Enforce organizational best practices via Golden Template alignment.  
+- **Scalable Foundation:** Lay groundwork for bulk migration across hundreds of pipelines.  
+- **Pilot Plan:** Select 2–3 representative Jenkinsfiles, run MVP flow, gather stakeholder feedback, refine mappings, then expand rollout.  
+
+---
+
+*This readiness summary is designed as a one-slide deck to align engineering, DevOps leadership, and platform teams on the MVP scope, flow, and outstanding decisions for the automated Jenkins-to-Harness migration.*
