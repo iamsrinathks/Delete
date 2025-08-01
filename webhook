@@ -1,0 +1,79 @@
+To integrate your custom webhook server in GKE with **Dialogflow CX**, you’ll need to make sure it meets Dialogflow’s webhook requirements and is properly registered in your agent. Here’s how to do it step by step:
+
+---
+
+### 🔗 1. Make Your Webhook Server Dialogflow-Compatible
+
+Dialogflow CX sends a **WebhookRequest** as a JSON payload via HTTPS POST. Your server must:
+
+- Accept HTTPS POST requests
+- Parse the incoming JSON payload
+- Respond with a valid **WebhookResponse** JSON object
+
+Example response format:
+
+```json
+{
+  "fulfillment_response": {
+    "messages": [
+      {
+        "text": {
+          "text": ["Hello from GKE webhook!"]
+        }
+      }
+    ]
+  }
+}
+```
+
+---
+
+### 🌐 2. Expose Your Webhook Server Publicly
+
+Since Dialogflow CX needs to reach your server:
+
+- Use an **Ingress** in GKE to expose the service
+- Secure it with **TLS** (HTTPS is mandatory)
+- Optionally, use a domain name and configure DNS
+
+---
+
+### 🛡️ 3. Secure the Endpoint
+
+Dialogflow supports:
+
+- **Authentication headers** (you can configure these in the webhook settings)
+- **Custom CA certificates** if needed
+- Make sure your server validates incoming requests if required
+
+---
+
+### 🧭 4. Register the Webhook in Dialogflow CX Console
+
+In the Dialogflow CX console:
+
+1. Go to your agent
+2. Click **Webhooks**
+3. Click **Create**
+4. Enter:
+   - Display name
+   - Webhook URL (your GKE endpoint)
+   - Timeout settings
+   - Authentication headers (if needed)
+5. Save
+
+You can now use this webhook in **fulfillment** sections of your flows and intents.
+
+---
+
+### 🧪 5. Test It!
+
+Use the Dialogflow CX simulator to trigger the webhook and inspect the response. Make sure:
+
+- The webhook is invoked
+- The response is correctly parsed
+- The user sees the expected reply
+
+---
+
+Want help writing the webhook response handler or setting up the Ingress with TLS? I can walk you through that too. Just say the word.
