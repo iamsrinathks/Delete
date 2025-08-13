@@ -1,0 +1,96 @@
+variable "project_id" {
+  type = string
+}
+variable "location_id" {
+  type = string # e.g., "europe-west2"
+}
+variable "kms_key_ring" {
+  type = string
+}
+variable "kms_key_id" {
+  type = string
+}
+variable "access_token" {
+  type      = string
+  sensitive = true
+}
+
+locals {
+  cmek_key_full = "projects/${var.project_id}/locations/${var.location_id}/keyRings/${var.kms_key_ring}/cryptoKeys/${var.kms_key_id}"
+  dlg_base      = "https://${var.location_id}-dialogflow.googleapis.com/v2/projects/${var.project_id}/locations/${var.location_id}"
+  auth_header   = "Bearer ${var.access_token}"
+}
+
+# 1) Initialize CMEK (idempotent: service will no-op if already initialized)
+resource "terracurl_request" "init_cmek" {
+  name         = "init-cmek"
+  method       = "POST"
+  url          = "${local.dlg_base}/encryptionSpec:initialize"
+  request_body = jsonencode({ encryptionSpec = { kmsKey = local.cmek_key_full } })
+
+  headers = {
+    Authorization = local.auth_header
+    Content-Type  = "application/json; charset=utf-8"
+  }
+}
+
+# Extract operation name from init response
+locals {
+  init_op_name = try(jsondecode(terracurl_request.init_cmek.response_body).name, "")
+}
+
+# 2) Wait for the long-running operation to complete (bounded wait)
+# POST .../operations/OPERATION_ID:wait with a timeout so Terraform blocks here until done or timeout.
+resource "terracurl_request" "wait_cmek" {
+  count        = local.init_op_name != "" ? 1 : 0
+  name         = "wait-cmek"
+  method       = "POST"
+  # The operation name is a full path 'projects/.../locations/.../operations/OPERATION_ID'
+  # Prepend the service base and suffix ':wait'
+  url          = "https://${var.location_id}-dialogflow.googleapis.com/v2/${local.init_op_name}:wait"
+  request_body = jsonencode({ timeout = "600s" }) # adjust to your 5–8 minute expectation
+
+  headers = {
+    Authorization = local.auth_header
+    Content-Type  = "application/json; charset=utf-8"
+  }
+
+  # Optional: provider-level timeout if your terracurl supports it; otherwise rely on 'timeout' above.
+  # timeouts { create = "15m" }
+}
+
+# 3) Verify CMEK after wait
+data "terracurl_request" "get_cmek_final" {
+  depends_on = [terracurl_request.wait_cmek]
+  name       = "get-cmek-final"
+  method     = "GET"
+  url        = "${local.dlg_base}/encryptionSpec"
+
+  headers = {
+    Authorization = local.auth_header
+    Content-Type  = "application/json"
+  }
+}
+
+locals {
+  cmek_key_configured = try(jsondecode(data.terracurl_request.get_cmek_final.response_body).encryptionSpec.kmsKey, "")
+  cmek_ready          = local.cmek_key_configured != ""
+}
+
+# 4) Gate agent creation on CMEK readiness
+resource "google_dialogflow_cx_agent" "agent" {
+  count                 = local.cmek_ready ? 1 : 0
+  project               = var.project_id
+  location              = var.location_id
+  display_name          = "my-agent"
+  default_language_code = "en"
+  time_zone             = "Europe/London"
+
+  # Optional: defensive precondition for clarity if someone removes the count guard
+  lifecycle {
+    precondition {
+      condition     = local.cmek_ready
+      error_message = "CMEK is not configured for ${var.project_id}/${var.location_id}; agent creation blocked."
+    }
+  }
+}
