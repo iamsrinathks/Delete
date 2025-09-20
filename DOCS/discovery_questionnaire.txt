@@ -1,0 +1,48 @@
+This describes a list of considerations that are required for performing discovery feasibility assessments in the organisation.
+Area,Considerations
+Infrastructure and Product Lifecycle,Does it Support Terraform?
+Infrastructure and Product Lifecycle,Does the product only use CSP Native APIs?
+Infrastructure and Product Lifecycle,Can all of the APIs be protected using VPC-SC?
+Infrastructure and Product Lifecycle,Are any public (non-RFC 1918) IP addresses used?
+Infrastructure and Product Lifecycle,Are labels supported for all resources?
+Infrastructure and Product Lifecycle,Does this product make use of any other products from the cloud provider to make up the offering?
+Infrastructure and Product Lifecycle,How is the product patched?
+Infrastructure and Product Lifecycle,What storage medium is this product using?
+Infrastructure and Product Lifecycle,Is this product going to be deprecated in the next 2 years?
+Infrastructure and Product Lifecycle,What is the control plane and data plane architecture for this product?
+Infrastructure and Product Lifecycle,What is the best way to track new releases for this product
+Cryptography,What algorithms are supported for encryption of data at rest? If encryption at rest is not supported then this should be highlighted as a concern.
+Cryptography,What algorithms are supported for encryption of data in transit? If encryption in transit is not supported then this should be highlighted as a concern.
+Cryptography,Does the service support customer managed encryption keys? If this is not the case then this should be highlighted as a concern.
+Cryptography,"If the product is storing secrets, can it integrate with Hashicorp Vault? This may not be applicable for database products.
+Cryptography,If the product has configurable certificates can it integrate with Hashicorp Vault?
+Cryptography,Does the product require custom certificates for access.  If this is the case and the product does not integrate with HC Vault then this should be highlighted as a concern.
+Security & Guardrails,Does it fully support Organisation Policy and Security Health Analytics? (via Built-in and Custom controlling all attributes). If this is not the case then this should be highlighted as a concern.
+Security & Guardrails,Does the product have implemented vulnerability scanning?
+Security & Guardrails,Does the product have implemented malware scanning?
+Security & Guardrails,Is it possible to restrict all processing and data storage so that it only occurs in the UK or Belgium? If this is not the case then this should be highlighted as a concern.
+Network,Is IP networking required (other than for CSP API access)?
+Network,Is private IP setup possible? If yes, then this will be preferred. What are the different private networking options. If PSC is supported then it is preferred and should be recommended. If PSA is suported, highlight if the IP address requirements are bigger than /24 mask.
+Network,Is a Google Tenant provisioned?
+Network,Is any public access required or assigned by default? If Public / internet access is required then this should be highlighted as a concern.
+Network,Does the service supports native GCP Firewalls/VPC-SC? If this is not the case then this should be highlighted as a concern.
+Network,Does the product deploy any compute resources into an Google & Tenant (Org) subnet?
+Network,Does the product require additional setup for collueage access. If this is the case then this should be highlighted as a concern.
+Network,Does the product require setup of additional networking compoents like load balancers. If this is the case then this should be highlighted as a concern.
+Network,Does the product require additional configuration for access (like reverse proxy). If this is the case then this should be highlighted as a concern.
+Network,Does the product require custom domain to be created and if yes, does the product natively integrate with HC Vault for certificate management. If HCV is not supported then it should be highlighted as a concern.
+Observability,"What types of logging does the service provide, are there any gaps in expected logging capabilities"? If this is not the case then this should be highlighted as a concern.
+Observability,Does it support Integration with Org Strategic Observability tool Dynatrace? If this is not the case then this should be highlighted as a concern.
+Observability,"Does the product collect any local logs, and how are these stored?
+Observability,Are the logs retained by the platform level forensics capability? If this is not the case then this should be highlighted as a concern.
+Resilience,What is the RTOs/RPOs and SLAs including disaster recovery mechanisms
+Resilience,Does the product provide full Asset Inventory support?
+Resilience,Does Product Support Multi-Region and Dual Region Capabilities
+Identity/Authentication/IAM,Can all access control be provided using GCP IAM? If this is not the case then this should be highlighted as a concern.
+Identity/Authentication/IAM,Does the product require additional integration to work with GCP IAM (for e.g. GCP OAUTH integration). If this is the case then this should be highlighted as a concern.
+Identity/Authentication/IAM,Does the product have any other auth mechansims apart from GCP IAM (for e.g. in-built users for postgres database)? If yes, then this should be highlighted.
+Identity/Authentication/IAM,"Does the product support RBAC roles via the CSP's IAM solution, and are there any roles of concern?
+Identity/Authentication/IAM,"Does the service have any permissions of its own, does it make requests or perform actions on your behalf against existing cloud resources?  For example, if Cloud Composer is calling other service to ""build"" them on your behalf." If this is the case then this should be highlighted as a concern.
+Identity/Authentication/IAM,"Does the service support local permissions?
+For example, a database that would allow uses to be created on the physical database outside of the cloud providers IAM solution. 
+If local users are supported, how can we secure them? Additionally, does the service grant further controls like SSO/MFA or password policies for example?"
