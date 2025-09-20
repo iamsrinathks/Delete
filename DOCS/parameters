@@ -1,0 +1,41 @@
+SECURITY CAPABILITIES AND PARAMETERS TABLE
+
+====================================================================================================================
+| Capability              | Weight | Description                           | Why It Matters                        |
+====================================================================================================================
+| VPC-SC                  | 5      | Support for VPC Service Controls      | Essential for perimeter security in   |
+|                         |        |                                       | financial orgs                        |
+|-------------------------|--------|---------------------------------------|---------------------------------------|
+| TLS                     | 5      | Transport Layer Security support      | Ensures encrypted data in transit     |
+|-------------------------|--------|---------------------------------------|---------------------------------------|
+| Ingress/Egress          | 5      | Control over incoming/outgoing traffic| Helps prevent data exfiltration       |
+|-------------------------|--------|---------------------------------------|---------------------------------------|
+| ILB Support             | 4      | Internal Load Balancer support        | Key for secure internal service       |
+|                         |        |                                       | exposure                              |
+|-------------------------|--------|---------------------------------------|---------------------------------------|
+| Encryption at Rest      | 5      | Encrypts data stored on disk          | Prevents unauthorized data access     |
+|-------------------------|--------|---------------------------------------|---------------------------------------|
+| Encryption in Transit   | 4      | Encrypts data during transmission     | Protects data over networks           |
+|-------------------------|--------|---------------------------------------|---------------------------------------|
+| IAM Controls            | 3      | Fine-grained access controls          | Ensures only authorized users can act |
+|-------------------------|--------|---------------------------------------|---------------------------------------|
+| Org Policies            | 3      | Supports GCP Org Policies             | Ensures compliance across projects    |
+|-------------------------|--------|---------------------------------------|---------------------------------------|
+| Custom Policies         | 4      | Custom rule creation                  | Enables tailored security and         |
+|                         |        |                                       | governance                            |
+|-------------------------|--------|---------------------------------------|---------------------------------------|
+| DLP                     | 2      | Data Loss Prevention integration      | Detects and protects sensitive info   |
+|-------------------------|--------|---------------------------------------|---------------------------------------|
+| Ease of Threat Modeling | 4      | Simplicity in assessing threat vectors| Aids in proactive design              |
+|-------------------------|--------|---------------------------------------|---------------------------------------|
+| Guardrailing            | 4      | Automated prevention measures         | Helps prevent misconfigurations       |
+|-------------------------|--------|---------------------------------------|---------------------------------------|
+| APIs                    | 3      | Mature and controllable APIs          | Critical for automation and           |
+|                         |        |                                       | integrations                          |
+|-------------------------|--------|---------------------------------------|---------------------------------------|
+| Private Service Connect | 3      | Supports PSC for internal access      | Improves secure service access        |
+|-------------------------|--------|---------------------------------------|---------------------------------------|
+| Service Perimeter       | 3      | Service Perimeter aware               | Prevents data leakage across services |
+|-------------------------|--------|---------------------------------------|---------------------------------------|
+| Threat Model            | 3      | Supports threat model practices       | Important for security by design      |
+====================================================================================================================
