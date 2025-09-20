@@ -1,0 +1,27 @@
+Guidelines for Product Curation Discovery.
+General Principles
+Security First: All new architectures and processes must prioritize security.
+Infrastructure as Code: all infrastructure should be maintained via IAC processes using Terraform.
+Compliance Adherence: Ensure compliance with relevant industry standards and regulations.
+Preventative controls needs to be deployed for IAC using GCP native controls (Org policies, custom org policies, SHA)
+Network and Connectivity Requirements
+Interconnect Usage: All traffic between connected environments should travel exclusively via interconnect. In disconnected or development environments, VPN must be used.
+Hub and Spoke Architecture: All product deployment must adhere to a hub and spoke architecture, following GCP's project-based isolation principles.
+Private networking: All products should be deployed with private IPs only and using private networking. PSC is preferred as it simplfies connectivity and reduces the IP address requirements over PSA.
+Data Security and Encryption
+Private Networking: For private networking, any product requiring more than a /24 IP usage should be flagged as it adds stress on the IP ranges available on the GCP platform.
+Customer Managed Encryption Key: The Customer Managed Encryption Key from GCP Cloud KMS must be used at all locations within the GCP environment.
+VPCSC (VPC Service Controls): all products should comply with VPCSC and should be protected under VPCSC.
+Identity and Access Management
+Workload Identity: Workload identity must be mandatory for all Kubernetes-related interactions with GCP products.
+Cloud SQL Auth Proxy: The Cloud SQL Auth Proxy sidecar pattern, combined with IAM authentication, is the only permitted method for authenticating to Cloud SQL. Other methods are strictly prohibited.
+Resilience
+HA: products should support multi-regional capabilities either with a multi-regional deployment or using a multiple region deployment with failover / DR.
+Backup and restore: any data storage product, should allow configuration of backups and allow processes for restoring data.
+Discovery evauluation Criteria
+Adherence to Guidelines: New product discovery strictly adhere to the outlined guidelines.
+Security Assessment: A thorough security assessment should be conducted to identify and mitigate potential vulnerabilities. CMEK, VPCSC and compliance are must haves.
+Networking requirements: A through assessment of the networking should be done ensuring private connectivity is only used and any deviation will require review.
+Compliance Review: Verify compliance with relevant industry standards and regulations.
+Resiliency and HA review: review the RPO and RTO of the product to determine if it can be 
+Note: These guidelines serve as a foundation for evaluating new architectures and processes. Specific requirements may vary based on individual organizational needs and risk tolerances. Regular reviews and updates are essential to ensure ongoing compliance and security.
