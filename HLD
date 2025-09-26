@@ -1,0 +1,50 @@
+ Overall Architecture:
+
+   * Framework: The project is built on the Google Agent Development Kit (ADK), a Python
+     framework for creating and orchestrating AI agents.
+   * Entrypoint: main.py sets up a FastAPI web server to expose the agent's functionality
+     as an API. It's designed for deployment on Google Cloud Run.
+   * Root Agent: The core of the application is the root_agent defined in
+     product_curation/agent.py. This agent acts as a coordinator, delegating tasks to
+     specialized sub-agents.
+
+  Key Components:
+
+   1. `root_agent`:
+       * Orchestration: It receives user requests and routes them to the appropriate
+         sub-agent based on the task.
+       * Tools:
+           * It can save a product name to the session for context.
+           * It uses an McpToolset to connect to a Confluence instance, allowing it to read
+             from or write to Confluence pages.
+       * Personalization: It replaces placeholders like [PRODUCT_NAME] in the final output
+         with the actual product name.
+
+   2. Sub-Agents: The root_agent manages two specialized sub-agents:
+       * `discovery_agent` (`product_curation/subagents/discovery/`): This agent is likely
+         responsible for gathering information and understanding a given product. Its
+         directory contains modules for discovering infrastructure, networking, and
+         security details, as well as generating product overviews.
+       * `security_agent` (`product_curation/subagents/security/`): This agent focuses on
+         security-related tasks. Its directory includes modules for migrating security
+         policies (like InSpec and OPA) and writing new ones. The output/sha_policies_json/
+         directory contains examples of the security policies this agent might generate.
+
+
+   3. Prompts (`prompts.py`): Each agent and sub-agent has a corresponding prompts.py file
+      that defines its instructions, persona, and goals. This is where the core behavior of
+      each agent is defined.
+
+   4. Tools (`tools/`): The project includes custom tools, such as search_tools.py, which
+      the agents can use to perform actions like searching for information.
+
+  In essence, this project is a sophisticated AI system that can:
+
+   * Interact with users through a web interface.
+   * Understand and discover information about a software product.
+   * Perform security analysis and generate security policies.
+   * Integrate with external systems like Confluence.
+
+  It demonstrates a modular and extensible approach to building complex AI agents by
+  composing smaller, specialized agents and providing them with the right tools and
+  instructions.
