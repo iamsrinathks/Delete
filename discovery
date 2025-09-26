@@ -1,0 +1,97 @@
+
+  1. High-Level Architecture: An Orchestra of Agents
+
+  The discovery agent is not a single entity but a hierarchy of agents working in
+  concert. This hierarchical structure is defined in
+  product_curation/subagents/discovery/agent.py.
+
+   * `DiscoveryAgent` (The Orchestrator): This is the top-level agent that manages the
+     entire discovery process. It acts as a project manager, coordinating the other agents
+     and interacting with the user.
+
+   * `ResearchAndCritiqueAgent` (The Engine): This is a SequentialAgent that performs the
+     core research and analysis. It's treated as a single, powerful "tool" that the
+     DiscoveryAgent can call. It executes its sub-agents in a specific order:
+       1. `ResearchAgents` (`ParallelAgent`): This agent runs four specialized "research"
+          agents simultaneously to gather information efficiently.
+       2. `ReCriticAgent`: After the research agents have finished, this agent takes their
+          collective output and synthesizes it into a final report.
+
+  2. The Workflow: From Research to Report
+
+  The discovery process follows a well-defined, multi-step workflow orchestrated by the
+  DiscoveryAgent:
+
+   1. Initial Research: The DiscoveryAgent kicks off the process by calling the
+      ResearchAndCritiqueAgent.
+
+   2. Parallel Research: The ResearchAndCritiqueAgent unleashes its four specialized
+      research agents, which work in parallel:
+       * `ProductOverviewAgent`: Gathers high-level information about the product's
+         features, pricing, and target audience.
+       * `DiscoveryInfrastructureAgent`: Analyzes how the product is provisioned, managed,
+         and scaled, with a focus on cloud infrastructure like Terraform and Google Cloud
+         primitives.
+       * `DiscoverySecurityAgent`: Investigates the product's security controls, such as
+         encryption, IAM, and VPC Service Controls.
+       * `DiscoveryNetworkingAgent`: Assesses the product's connectivity options, including
+         private networking (PSC/PSA), firewalls, and service endpoints.
+
+      All of these research agents are equipped with two powerful tools:
+       * google_search: For finding publicly available information.
+       * VertexAiSearchTool: For searching over a private, curated set of documents,
+         ensuring that the research is grounded in a trusted knowledge base.
+
+   3. Critique and Synthesis: Once the research agents have completed their tasks, the
+      ReCriticAgent takes over. Its job is to:
+       * Validate: Check the claims made by the research agents for accuracy and ensure
+         they are supported by cited sources.
+       * Critique: Identify any gaps, inconsistencies, or "hallucinated" information in
+         the research.
+       * Synthesize: Assemble the validated findings into a structured report using a
+         predefined template (discovery_questionnaire_template.md). This template ensures
+         that the final report is consistent and covers all the required areas of
+         analysis.
+
+   4. Human-in-the-Loop (HITL) Review: The DiscoveryAgent presents the synthesized report
+      to the user for review. It then uses the get_user_choice tool to ask for approval.
+      The user has two options:
+       * "Approve": If the user is satisfied with the report, the DiscoveryAgent proceeds
+         to the final step.
+       * "Provide Feedback": If the user has corrections or wants to add more information,
+         the DiscoveryAgent will take their feedback and re-run the
+         ResearchAndCritiqueAgent, incorporating the new information into the next
+         iteration.
+
+   5. Publishing the Report: Once the report is approved, the DiscoveryAgent uses the
+      create_confluence_page tool to publish the final, approved report to a Confluence
+      page. This tool converts the markdown report into Confluence's XHTML format before
+      publishing.
+
+  3. The "Brains" of the Operation: Prompts and Guidelines
+
+  The behavior of each agent is meticulously defined by a set of instructions, or
+  "prompts," located in product_curation/subagents/discovery/prompts.py. These prompts
+  are highly detailed and specify:
+
+   * Persona: The role and purpose of each agent.
+   * Workflow: A step-by-step guide on how the agent should operate.
+   * Tool Usage: When and how to use the available tools.
+   * Constraints: Rules and limitations to ensure the agent behaves as expected.
+   * Output Format: A strict schema for the agent's final output.
+
+  Additionally, the docs/ directory contains important documents that inform the agents'
+  behavior:
+
+   * `guidelines.md`: High-level principles for product curation, such as "Security First"
+     and "Infrastructure as Code."
+   * `capabilities.md`: A weighted list of security capabilities that are likely used to
+     evaluate the product's security posture.
+   * `discovery_questionnaire_template.md`: The template that the ReCriticAgent uses to
+     structure its final report.
+
+  In summary, the discovery agent codebase is a powerful example of how a complex,
+  real-world task can be automated by breaking it down into smaller, manageable sub-tasks
+   and assigning them to a team of specialized AI agents. It combines the power of large
+  language models with a structured, hierarchical workflow, custom tools, and a
+  human-in-the-loop review process to produce high-quality, reliable results.
