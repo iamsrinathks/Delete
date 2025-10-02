@@ -1,0 +1,433 @@
+** ready-to-run **MCP `kb.search` PoC** that:
+
+* pulls docs from Backstage (via its API),
+* pulls README files from GitHub repos (via the GitHub REST API),
+* builds a simple in-memory index (substring / keyword matching) for fast PoC queries,
+* exposes a `kb.search` resource on `FastMCP` which returns typed `Doc` results.
+
+I’ll include:
+
+* full `main.py` PoC code (async, `httpx`),
+* `requirements.txt`,
+* `.env.example`,
+* a `Dockerfile`,
+* quick run & test instructions,
+* guidance on production improvements (vector search, caching, auth, rate limits).
+
+---
+
+# What this PoC does (quick)
+
+1. On startup it fetches Backstage search results (configurable endpoint) and GitHub READMEs for configured repos or an org.
+2. Builds an in-memory index of small chunks (metadata + text).
+3. Exposes `kb.search(query: str) -> list[Doc]` via `FastMCP`.
+4. The search implements a simple keyword/substring search and returns top matches sorted by basic heuristic (occurrence count + title boost).
+
+This is intentionally simple so you can run it fast; later you can swap the index for a vector DB or elasticsearch.
+
+---
+
+# Files
+
+### `requirements.txt`
+
+```
+httpx>=0.24.0
+pydantic>=1.10
+python-dotenv>=0.21
+modelcontextprotocol @ git+https://github.com/modelcontextprotocol/python-sdk.git
+```
+
+> Note: the last line installs the MCP python-SDK from the official repo. If you already have the SDK packaged differently, adjust accordingly.
+
+---
+
+### `.env.example`
+
+```
+# Backstage
+BACKSTAGE_API_URL=https://backstage.example.com
+# optional: specific path to call for search (default: /api/search)
+BACKSTAGE_SEARCH_PATH=/api/search
+BACKSTAGE_TOKEN=       # if your Backstage requires a token (Bearer) — optional
+
+# GitHub
+GITHUB_TOKEN=ghp_xxx             # token to list org repos / read private repo contents. set read-only repo scope
+GITHUB_ORG=my-org                # OR set GITHUB_REPOS (below)
+# Alternatively you can provide a comma separated list of full repo names OWNER/REPO
+GITHUB_REPOS=owner1/repo1,owner2/repo2
+
+# Indexing options
+INDEX_REFRESH_SECONDS=3600
+MAX_README_BYTES=200_000
+
+# MCP (optional)
+MCP_HOST=0.0.0.0
+MCP_PORT=8080
+```
+
+---
+
+### `main.py`
+
+```python
+import os
+import base64
+import asyncio
+from typing import List, Dict, Optional
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+
+import httpx
+from pydantic import BaseModel
+from dotenv import load_dotenv
+
+from mcp.server.fastmcp import FastMCP  # from the python-sdk
+
+load_dotenv()  # load .env
+
+# ---------- Config ----------
+BACKSTAGE_URL = os.getenv("BACKSTAGE_API_URL", "").rstrip("/")
+BACKSTAGE_SEARCH_PATH = os.getenv("BACKSTAGE_SEARCH_PATH", "/api/search")
+BACKSTAGE_TOKEN = os.getenv("BACKSTAGE_TOKEN")  # optional
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_ORG = os.getenv("GITHUB_ORG")
+GITHUB_REPOS = [r.strip() for r in os.getenv("GITHUB_REPOS", "").split(",") if r.strip()]
+INDEX_REFRESH_SECONDS = int(os.getenv("INDEX_REFRESH_SECONDS", "3600"))
+MAX_README_BYTES = int(os.getenv("MAX_README_BYTES", "200000"))
+
+
+# ---------- Models ----------
+class Doc(BaseModel):
+    id: str
+    title: str
+    snippet: str
+    url: str
+    source: str
+    score: Optional[float] = None
+
+
+@dataclass
+class IndexItem:
+    id: str
+    title: str
+    text: str
+    url: str
+    source: str
+    created_at: datetime = field(default_factory=datetime.utcnow)
+
+
+# ---------- Simple In-Memory Index ----------
+class InMemoryIndex:
+    def __init__(self):
+        self.items: List[IndexItem] = []
+        self.updated_at: Optional[datetime] = None
+        self.lock = asyncio.Lock()
+
+    async def rebuild(self, backstage_docs: List[Dict], github_docs: List[Dict]):
+        async with self.lock:
+            items: List[IndexItem] = []
+            # Backstage docs: expect dicts with {id, title, text, url}
+            for d in backstage_docs:
+                items.append(IndexItem(
+                    id=f"backstage:{d.get('id') or d.get('entity') or d.get('title')}",
+                    title=d.get("title") or d.get("name") or "",
+                    text=d.get("text") or d.get("description") or "",
+                    url=d.get("url") or d.get("link") or "",
+                    source="backstage"
+                ))
+            # GitHub docs
+            for d in github_docs:
+                items.append(IndexItem(
+                    id=f"github:{d.get('repo')}",
+                    title=d.get("repo"),
+                    text=d.get("content") or "",
+                    url=d.get("url") or d.get("html_url") or "",
+                    source="github"
+                ))
+            self.items = items
+            self.updated_at = datetime.utcnow()
+
+    async def search(self, query: str, top_k: int = 10) -> List[Doc]:
+        q = (query or "").strip().lower()
+        if not q:
+            return []
+        results = []
+        # Basic scoring: count occurrences in title (boost) + occurrences in text
+        for it in self.items:
+            title = it.title.lower()
+            text = it.text.lower()
+            score = 0
+            if q in title:
+                score += 5
+            score += text.count(q)
+            # small length normalization
+            if score > 0:
+                snippet = self._make_snippet(it.text, q)
+                results.append((score, it, snippet))
+        # sort by score desc, then recency
+        results.sort(key=lambda x: (x[0], (datetime.utcnow() - x[1].created_at).total_seconds() * -1), reverse=True)
+        docs = []
+        for score, it, snippet in results[:top_k]:
+            docs.append(Doc(id=it.id, title=it.title, snippet=snippet, url=it.url, source=it.source, score=float(score)))
+        return docs
+
+    def _make_snippet(self, text: str, q: str, max_len: int = 300) -> str:
+        tl = text.lower()
+        idx = tl.find(q)
+        if idx == -1:
+            # return beginning
+            return (text or "")[:max_len]
+        start = max(0, idx - 80)
+        end = min(len(text), idx + len(q) + 80)
+        snippet = text[start:end]
+        if start > 0:
+            snippet = "..." + snippet
+        if end < len(text):
+            snippet = snippet + "..."
+        return snippet
+
+
+index = InMemoryIndex()
+
+
+# ---------- Backstage & GitHub fetchers ----------
+async def fetch_backstage_docs(client: httpx.AsyncClient, limit: int = 1000) -> List[Dict]:
+    """
+    Attempts to fetch from a configurable search endpoint in Backstage.
+    The exact shape of Backstage responses can vary; this PoC expects list of entities
+    or search results with fields: id/title/description/url/text. You may need to adapt to your Backstage instance.
+    """
+    if not BACKSTAGE_URL:
+        return []
+
+    endpoint = f"{BACKSTAGE_URL}{BACKSTAGE_SEARCH_PATH}"
+    headers = {}
+    if BACKSTAGE_TOKEN:
+        headers["Authorization"] = f"Bearer {BACKSTAGE_TOKEN}"
+
+    try:
+        # Many Backstage deployments provide either /api/search or /api/catalog/entities endpoints.
+        # We'll call the configured endpoint without query to fetch available docs/pages (PoC).
+        resp = await client.get(endpoint, headers=headers, params={"limit": limit}, timeout=30.0)
+        resp.raise_for_status()
+        payload = resp.json()
+        # Normalize payload to a list of docs
+        docs = []
+        if isinstance(payload, dict) and "results" in payload:
+            items = payload["results"]
+        elif isinstance(payload, list):
+            items = payload
+        elif isinstance(payload, dict) and "items" in payload:
+            items = payload["items"]
+        else:
+            items = []
+        for it in items:
+            # Try to extract fields in a liberal way
+            title = it.get("title") or it.get("name") or (it.get("metadata") or {}).get("title") or ""
+            desc = it.get("text") or it.get("description") or (it.get("metadata") or {}).get("description") or ""
+            url = it.get("url") or it.get("link") or (it.get("metadata") or {}).get("annotations", {}).get("backstage.io/techdocs-ref") or ""
+            docs.append({"id": it.get("id") or it.get("uid") or title, "title": title, "text": desc, "url": url})
+        return docs
+    except Exception as e:
+        print("Backstage fetch failed:", e)
+        return []
+
+
+async def fetch_github_readme_for_repo(client: httpx.AsyncClient, repo_full_name: str) -> Optional[Dict]:
+    """
+    Fetch README for a single repo via GET /repos/{owner}/{repo}/readme
+    returns dict {repo, content(decoded), url, html_url}
+    """
+    url = f"https://api.github.com/repos/{repo_full_name}/readme"
+    headers = {"Accept": "application/vnd.github.v3+json"}
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"token {GITHUB_TOKEN}"
+    try:
+        resp = await client.get(url, headers=headers, timeout=30.0)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        payload = resp.json()
+        # content is base64
+        b64 = payload.get("content", "")
+        raw = base64.b64decode(b64).decode("utf-8", errors="replace")
+        if len(raw) > MAX_README_BYTES:
+            raw = raw[:MAX_README_BYTES]
+        return {"repo": repo_full_name, "content": raw, "url": url, "html_url": payload.get("html_url")}
+    except Exception as e:
+        print(f"Failed to fetch README {repo_full_name}: {e}")
+        return None
+
+
+async def list_org_repos(client: httpx.AsyncClient, org: str, per_page: int = 100, max_pages: int = 10) -> List[str]:
+    """List repos for an org (simple pagination). Returns full_name list owner/repo"""
+    if not org:
+        return []
+    headers = {"Accept": "application/vnd.github.v3+json"}
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"token {GITHUB_TOKEN}"
+    repos = []
+    page = 1
+    while page <= max_pages:
+        url = f"https://api.github.com/orgs/{org}/repos"
+        params = {"per_page": per_page, "page": page}
+        resp = await client.get(url, headers=headers, params=params, timeout=30.0)
+        if resp.status_code == 404:
+            break
+        resp.raise_for_status()
+        items = resp.json()
+        if not items:
+            break
+        repos.extend([it["full_name"] for it in items if "full_name" in it])
+        if len(items) < per_page:
+            break
+        page += 1
+    return repos
+
+
+# ---------- Index builder / refresher ----------
+async def build_index_once():
+    async with httpx.AsyncClient() as client:
+        backstage_docs = await fetch_backstage_docs(client)
+        github_docs = []
+        repo_list = []
+        if GITHUB_REPOS:
+            repo_list = GITHUB_REPOS
+        elif GITHUB_ORG:
+            repo_list = await list_org_repos(client, GITHUB_ORG)
+        # fetch READMEs concurrently
+        tasks = [fetch_github_readme_for_repo(client, r) for r in repo_list]
+        for fut in asyncio.as_completed(tasks):
+            res = await fut
+            if res:
+                github_docs.append({"repo": res["repo"], "content": res["content"], "url": res.get("html_url") or res.get("url")})
+        await index.rebuild(backstage_docs, github_docs)
+        print(f"Index built: {len(index.items)} items.")
+
+
+async def index_refresher_loop():
+    while True:
+        try:
+            await build_index_once()
+        except Exception as e:
+            print("Index build error:", e)
+        await asyncio.sleep(INDEX_REFRESH_SECONDS)
+
+
+# ---------- MCP server + resource ----------
+m = FastMCP()
+
+
+@m.resource(name="kb.search")
+async def kb_search(query: str, top_k: int = 10) -> List[Doc]:
+    """
+    Simple MCP resource exposing a keyword/substring search across Backstage + GitHub content.
+    For production you may accept filters (source, repo, tag) and pagination.
+    """
+    if index.updated_at is None:
+        # If the index isn't ready, try to build on demand (short timeout)
+        try:
+            await build_index_once()
+        except Exception:
+            pass
+    results = await index.search(query, top_k=top_k)
+    return results
+
+
+# ---------- Server entrypoint ----------
+def start_background_tasks(loop: asyncio.AbstractEventLoop):
+    # start index refresher in background
+    loop.create_task(index_refresher_loop())
+
+
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    start_background_tasks(loop)
+    # run MCP server (will run in the current thread)
+    print("Starting MCP FastMCP... (kb.search resource exposed)")
+    m.run(host=os.getenv("MCP_HOST", "0.0.0.0"), port=int(os.getenv("MCP_PORT", 8080)))
+```
+
+---
+
+# How to run locally (quick)
+
+1. Copy `requirements.txt`, `.env.example -> .env` and edit `.env` to include your `GITHUB_TOKEN` and either `GITHUB_ORG` or `GITHUB_REPOS`. Set `BACKSTAGE_API_URL` and `BACKSTAGE_SEARCH_PATH` for your Backstage instance (or leave blank to skip Backstage).
+2. Create a virtualenv and install:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+3. Run:
+
+```bash
+cp .env.example .env  # edit .env
+python main.py
+```
+
+4. Test by calling the resource directly (for quick checks) inside Python REPL or as a small script:
+
+```python
+import asyncio
+from main import kb_search
+
+print(asyncio.run(kb_search("onboard")))
+```
+
+Or use any MCP client that speaks the transport the SDK exposes (FastMCP default). For early testing you can call the function directly as above.
+
+---
+
+# Dockerfile (simple)
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+ENV PYTHONUNBUFFERED=1
+
+CMD ["python", "main.py"]
+```
+
+---
+
+# Notes, caveats & next steps
+
+**Backstage API details** — Backstage deployments vary: some expose `/api/search`, others rely on `/api/catalog/entities` or techdocs endpoints. This PoC calls a configurable `BACKSTAGE_SEARCH_PATH`. You will likely adapt the `fetch_backstage_docs` to match your Backstage instance (for example, call `/api/catalog/entities?filter=kind:Component` or query TechDocs endpoints to fetch rendered markdown content).
+
+**Auth** — Provide `BACKSTAGE_TOKEN` if Backstage requires auth; `GITHUB_TOKEN` is strongly recommended if you will access many repos or private repos. For GitHub use a token with minimal `repo` or `public_repo` scope as appropriate.
+
+**Indexing strategy** — This PoC fetches READMEs and Backstage docs and stores raw text in memory. For thousands of repos/docs, switch to:
+
+* persistent storage (Postgres / Firestore / Cloud Storage for text + metadata),
+* a proper full-text index (Elasticsearch / CloudSearch / Postgres FTS) OR vector search for semantic retrieval.
+
+**Semantic / RAG** — If user queries require semantic matches, later add:
+
+* embeddings (Vertex AI Embeddings or OpenAI),
+* a vector index (Vertex Matching Engine, Pinecone, Weaviate, FAISS),
+* hybrid retrieval: run keyword + vector search and merge results.
+
+**Rate limits & retries** — Use exponential backoff and set reasonable concurrency when calling GitHub. For orgs with many repos add pagination and job batching.
+
+**Security & auditing** — For `ticket.create` tools or any side-effect tools, check `ctx` to enforce scopes and log user identity. For this PoC `kb.search` is read-only.
+
+**Observability** — Add metrics (Prometheus), logs, and health/liveness endpoints. Ensure `m.run()` is run under a proper ASGI server and process manager for production.
+
+---
+
+# Want me to:
+
+* adapt `fetch_backstage_docs` to your specific Backstage instance (paste a sample Backstage API response and I'll map it), OR
+* replace the simple substring index with a hybrid ranking using Vertex embeddings + Pinecone/Vertex Matching Engine and provide the code for ingestion & query?
+
+Tell me which next step and I’ll generate that code (or I can adjust the PoC to fetch more fields from Backstage if you paste a sample response).
