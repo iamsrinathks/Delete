@@ -205,3 +205,16 @@ async def handle_rpc(request: Request):
     # Unknown method
     return JSONResponse({"jsonrpc": "2.0", "id": body["id"],
                          "error": {"code": -32601, "message": f"Method '{method}' not supported"}})
+
+
+
+
+
+
+
+#To Run the above----------
+export GITHUB_TOKEN=your_github_token
+export GITHUB_ORG=your_org_name
+export GOOGLE_CLIENT_ID=your_google_client_id
+pip install fastapi uvicorn requests google-auth
+uvicorn mcp_github_server:app --host 0.0.0.0 --port 8000 --reload
