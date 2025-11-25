@@ -1,57 +1,48 @@
 # mcp_github_server.py
-
 import os
 import base64
 import requests
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from google.oauth2 import id_token
-from google.auth.transport import requests as google_requests
 
 app = FastAPI()
 
-# Load configuration from environment variables
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")        # GitHub personal access token or app token
-GITHUB_ORG = os.getenv("GITHUB_ORG")            # GitHub organization name
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")  # Expected audience for Google ID tokens
+# Load config from environment variables
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_ORG = os.getenv("GITHUB_ORG")
 
-if not GITHUB_TOKEN or not GITHUB_ORG or not GOOGLE_CLIENT_ID:
-    raise RuntimeError("Environment variables GITHUB_TOKEN, GITHUB_ORG, and GOOGLE_CLIENT_ID must be set.")
+if not GITHUB_TOKEN or not GITHUB_ORG:
+    raise RuntimeError("Environment vars GITHUB_TOKEN and GITHUB_ORG must be set.")
 
-# Header for GitHub API requests
 GH_HEADERS = {
     "Authorization": f"Bearer {GITHUB_TOKEN}",
     "Accept": "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28"
 }
 
-# Definition of available tools for tools/list
 TOOLS = [
     {
         "name": "searchTerraformModules",
         "title": "Search Terraform Modules",
-        "description": "Search for Terraform modules in the GitHub organization by keyword.",
+        "description": "Search GitHub org for Terraform modules",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search query for Terraform modules"
-                }
+                "query": {"type": "string", "description": "Search keyword"}
             },
             "required": ["query"]
         }
     },
     {
         "name": "getBackstageDocs",
-        "title": "Get Backstage Documentation",
-        "description": "Retrieve Markdown or YAML documentation for a Backstage service from GitHub.",
+        "title": "Get Backstage Docs",
+        "description": "Find Markdown/YAML docs for a Backstage service",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "serviceName": {
                     "type": "string",
-                    "description": "Name of the Backstage service"
+                    "description": "Backstage service name"
                 }
             },
             "required": ["serviceName"]
@@ -59,162 +50,161 @@ TOOLS = [
     }
 ]
 
-def verify_google_token(auth_header: str):
-    """
-    Verify Google OAuth2 bearer token (ID token) in the Authorization header.
-    Raises HTTPException(401) if invalid.
-    """
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-    token = auth_header.split(" ", 1)[1]
-    try:
-        # Verify the token's signature and audience
-        idinfo = id_token.verify_oauth2_token(token, google_requests.Request(), GOOGLE_CLIENT_ID)
-        # Optionally, you can check idinfo['hd'] for hosted domain restrictions
-    except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+
+# ---------------------------
+# TOOL IMPLEMENTATIONS
+# ---------------------------
 
 def search_terraform_modules(query: str):
     """
-    Call GitHub Search API to find repositories in the org matching the query.
-    Returns a string listing name, description, and URL of each repo.
+    Search GitHub for Terraform modules in your org.
+    Only returns repos starting with 'terraform-google-'
     """
-    # Construct GitHub search query: include org filter
-    q = f"{query} org:{GITHUB_ORG} in:name,description"
     url = "https://api.github.com/search/repositories"
-    resp = requests.get(url, headers=GH_HEADERS, params={"q": q, "per_page": 5})
+    # broad search first
+    q = f"{query} org:{GITHUB_ORG} in:name"
+    
+    resp = requests.get(url, headers=GH_HEADERS, params={"q": q, "per_page": 20})
+    
     if resp.status_code != 200:
         return f"GitHub search error: {resp.text}"
-    data = resp.json()
-    items = data.get("items", [])
-    if not items:
-        return f"No Terraform modules found matching '{query}'."
-    # Format results as bullet list
+
+    all_items = resp.json().get("items", [])
+
+    # filter by naming convention
+    modules = [
+        item for item in all_items
+        if item["name"].startswith("terraform-google-")
+    ]
+
+    if not modules:
+        return f"No Terraform modules found matching pattern 'terraform-google-*' with query '{query}'."
+
+    # Format results
     lines = []
-    for item in items:
-        name = item.get("name", "")
-        desc = item.get("description", "").strip() if item.get("description") else ""
-        url = item.get("html_url", "")
+    for item in modules:
+        name = item["name"]
+        desc = item.get("description", "") or ""
+        url = item["html_url"]
         lines.append(f"- **{name}**: {desc} ({url})")
+
     return "\n".join(lines)
+
 
 def get_backstage_docs(service_name: str):
     """
-    Search GitHub for a file named {service_name}.md or .yaml in the org,
-    and return its contents (decoded from Base64).
+    Search ONLY inside the curation-catalogue repo for Backstage docs.
+    Looks inside docs/ and catalog/ folders for .md/.yaml/.yml files.
     """
+    BACKSTAGE_REPO = "curation-catalogue"
+
     search_url = "https://api.github.com/search/code"
-    file_content = None
-    found_path = None
-    found_repo = None
 
-    # Try markdown first, then yaml
-    for ext in ["md", "yaml", "yml"]:
-        query = f"filename:{service_name}.{ext} org:{GITHUB_ORG}"
-        resp = requests.get(search_url, headers=GH_HEADERS, params={"q": query, "per_page": 1})
-        if resp.status_code == 200:
-            results = resp.json().get("items", [])
-            if results:
-                item = results[0]
-                repo = item["repository"]
-                found_repo = repo["full_name"]  # "owner/repo"
-                found_path = item["path"]
+    # possible folder locations
+    search_paths = ["docs", "catalog", "backstage", "services"]
+
+    # file extensions supported
+    extensions = ["md", "yaml", "yml"]
+
+    found = None
+
+    for path in search_paths:
+        for ext in extensions:
+            query = (
+                f"repo:{GITHUB_ORG}/{BACKSTAGE_REPO} "
+                f"path:{path} "
+                f"filename:{service_name}.{ext}"
+            )
+
+            resp = requests.get(search_url, headers=GH_HEADERS, params={"q": query, "per_page": 1})
+
+            if resp.status_code == 200 and resp.json().get("items"):
+                found = resp.json()["items"][0]
                 break
+        if found:
+            break
 
-    if not found_path:
-        return f"No documentation file found for service '{service_name}'."
+    if not found:
+        return (
+            f"No Backstage documentation found for '{service_name}' "
+            f"in repo '{BACKSTAGE_REPO}'."
+        )
 
-    # Fetch the file contents
-    owner, repo = found_repo.split("/", 1)
-    contents_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{found_path}"
+    # fetch actual content
+    file_path = found["path"]
+    repo_full = found["repository"]["full_name"]  # ORG/curation-catalogue
+    owner, repo = repo_full.split("/", 1)
+
+    contents_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path}"
     resp = requests.get(contents_url, headers=GH_HEADERS)
+
     if resp.status_code != 200:
-        return f"Failed to fetch file from GitHub: {resp.text}"
-    content_data = resp.json()
-    # GitHub returns file content in Base64
-    encoded = content_data.get("content", "")
-    try:
-        decoded_bytes = base64.b64decode(encoded, validate=False)
-        file_content = decoded_bytes.decode('utf-8', errors='ignore')
-    except Exception:
-        return "Error decoding file content."
-    header = f"**File:** `{found_path}` in `{owner}/{repo}`\n\n"
-    return header + file_content
+        return f"Failed to fetch documentation: {resp.text}"
+
+    encoded = resp.json().get("content", "")
+    decoded = base64.b64decode(encoded).decode("utf-8", errors="ignore")
+
+    return f"**File:** `{file_path}` in `{repo_full}`\n\n{decoded}"
+
+
+# ---------------------------
+# MCP ENDPOINT
+# ---------------------------
 
 @app.post("/")
-async def handle_rpc(request: Request):
-    # Parse JSON-RPC request
+async def mcp_entrypoint(request: Request):
     body = await request.json()
-    # Validate basic structure
-    if body.get("jsonrpc") != "2.0" or "method" not in body or "id" not in body:
-        return JSONResponse(status_code=400, content={"error": {"code": -32600, "message": "Invalid JSON-RPC request"}})
-    # OAuth2 token validation
-    try:
-        verify_google_token(request.headers.get("Authorization"))
-    except HTTPException as auth_err:
-        return JSONResponse(status_code=401, content={"jsonrpc": "2.0", "id": body["id"],
-                                                     "error": {"code": -32001, "message": auth_err.detail}})
-    method = body["method"]
-    # tools/list: return metadata for each tool
+
+    if body.get("jsonrpc") != "2.0":
+        return JSONResponse({"error": {"code": -32600, "message": "Invalid JSON-RPC format"}})
+
+    method = body.get("method")
+    req_id = body.get("id")
+
+    # === tools/list ===
     if method == "tools/list":
         return JSONResponse({
             "jsonrpc": "2.0",
-            "id": body["id"],
+            "id": req_id,
             "result": {
                 "tools": TOOLS,
                 "nextCursor": None
             }
         })
 
-    # tools/call: execute a named tool
+    # === tools/call ===
     if method == "tools/call":
         params = body.get("params", {})
-        name = params.get("name")
+        tool = params.get("name")
         args = params.get("arguments", {})
-        if name == "searchTerraformModules":
-            query = args.get("query", "").strip()
-            if not query:
-                return JSONResponse({"jsonrpc": "2.0", "id": body["id"],
-                                     "error": {"code": -32602, "message": "Missing 'query' parameter"}})
-            output_text = search_terraform_modules(query)
-        elif name == "getBackstageDocs":
-            service = args.get("serviceName", "").strip()
-            if not service:
-                return JSONResponse({"jsonrpc": "2.0", "id": body["id"],
-                                     "error": {"code": -32602, "message": "Missing 'serviceName' parameter"}})
-            output_text = get_backstage_docs(service)
+
+        if tool == "searchTerraformModules":
+            q = args.get("query", "")
+            result = search_terraform_modules(q)
+
+        elif tool == "getBackstageDocs":
+            svc = args.get("serviceName", "")
+            result = get_backstage_docs(svc)
+
         else:
-            # Method not found
-            return JSONResponse({"jsonrpc": "2.0", "id": body["id"],
-                                 "error": {"code": -32601, "message": f"Tool '{name}' not found"}})
-        # Return the tool result as text content
+            return JSONResponse({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {"code": -32601, "message": f"Unknown tool: {tool}"}
+            })
+
         return JSONResponse({
             "jsonrpc": "2.0",
-            "id": body["id"],
+            "id": req_id,
             "result": {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": output_text
-                    }
-                ],
+                "content": [{"type": "text", "text": result}],
                 "isError": False
             }
         })
 
     # Unknown method
-    return JSONResponse({"jsonrpc": "2.0", "id": body["id"],
-                         "error": {"code": -32601, "message": f"Method '{method}' not supported"}})
-
-
-
-
-
-
-
-#To Run the above----------
-export GITHUB_TOKEN=your_github_token
-export GITHUB_ORG=your_org_name
-export GOOGLE_CLIENT_ID=your_google_client_id
-pip install fastapi uvicorn requests google-auth
-uvicorn mcp_github_server:app --host 0.0.0.0 --port 8000 --reload
+    return JSONResponse({
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "error": {"code": -32601, "message": f"Unknown method: {method}"}
+    })
