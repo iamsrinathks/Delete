@@ -81,3 +81,32 @@ As you begin to explore BigQuery Reservations, keep these three essential rules 
 * If you purchase a commitment but do not create any assignments, the slots will be automatically shared across your entire organization.
 
 By mastering these concepts—Commitments, Reservations, and Assignments—you can move from a reactive, on-demand model to a proactive, capacity-based strategy. This gives you precise control over performance and costs, ensuring BigQuery scales effectively with your organization's needs.
+
+
+
+-------------------------
+
+To manage capacity-based billing in BigQuery, you need specific Identity and Access Management (IAM) permissions depending on whether you are purchasing capacity, creating resource pools, or assigning workloads.
+Creating and Managing Reservations
+To create a standard slot reservation, you must have the bigquery.reservations.create permission on the administration project that owns the commitments. The predefined roles that include this permission are BigQuery Resource Editor and BigQuery Resource Admin. If you intend to create predictable reservations with absolute maximums, you also need the bigquery.config.update permission on the admin project to enable reservation-based fairness. To update or delete existing reservations, you need bigquery.reservations.update and bigquery.reservations.delete respectively.
+Purchasing and Managing Commitments
+To purchase dedicated capacity, you need the bigquery.capacityCommitments.create permission on the administration project. This permission is contained within the BigQuery Admin and BigQuery Resource Admin predefined roles. For ongoing management, such as renewing, splitting, or merging commitments, the bigquery.capacityCommitments.update permission is required.
+Creating and Managing Assignments
+To assign a project, folder, or organization to a reservation, you must have the bigquery.reservationAssignments.create permission on both the administration project and the assignee (the resource being assigned). Predefined roles including this permission are BigQuery Admin, BigQuery Resource Admin, and BigQuery Resource Editor. To move or delete assignments, you additionally need bigquery.reservationAssignments.delete. To view or find existing assignments, the bigquery.reservationAssignments.list permission is required.
+BI Engine Reservations
+To create or delete reservations specifically for BI Engine in-memory acceleration, you must be granted the BigQuery Resource Admin (roles/bigquery.resourceAdmin) role on the project.
+Using and Overriding Reservations
+For a user to manually override a default reservation and specify a different one for a specific query job (at runtime via SQL or CLI), they must have the bigquery.reservations.use permission. This permission is provided by the BigQuery Resource Admin and BigQuery Resource Editor roles.
+Summary Table of Required Roles
+Task
+Required Predefined Roles
+Purchase Commitments
+BigQuery Admin, BigQuery Resource Admin
+Create Reservations
+BigQuery Resource Admin, BigQuery Resource Editor
+Create Assignments
+BigQuery Admin, BigQuery Resource Admin, BigQuery Resource Editor
+Manage BI Engine
+BigQuery Resource Admin
+Override/Use Slots
+BigQuery Resource Admin, BigQuery Resource Editor
