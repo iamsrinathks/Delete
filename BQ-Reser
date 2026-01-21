@@ -110,3 +110,54 @@ Manage BI Engine
 BigQuery Resource Admin
 Override/Use Slots
 BigQuery Resource Admin, BigQuery Resource Editor
+
+
+
+
+The following table outlines the features and limitations of the three BigQuery editions (Standard, Enterprise, and Enterprise Plus) based on the provided sources:
+Feature / Category
+Standard Edition
+Enterprise Edition
+Enterprise Plus Edition
+Pay-As-You-Go Rate (us-central1)
+$0.04 per slot-hour.
+$0.06 per slot-hour.
+$0.10 per slot-hour.
+Slot Commitments
+Not supported; only pay-as-you-go is available.
+Supported for 1-year or 3-year durations at discounted rates.
+Supported for 1-year or 3-year durations at discounted rates.
+Baseline Slots
+Not supported; all capacity must be autoscaled.
+Supported, providing guaranteed capacity that is always available.
+Supported, providing guaranteed capacity that is always available.
+Workload Management
+Limited to project-level assignments.
+Supports Project, Folder, and Organization-level assignments.
+Supports Project, Folder, and Organization-level assignments.
+Job Type Support
+Supports standard analytical queries and pipelines.
+Supports BigQuery ML, CDC, metadata caching, and search index refresh.
+Supports all Enterprise job types plus Gemini in BigQuery.
+Regional Contention Priority
+Lowest priority, shared with on-demand capacity.
+High priority; committed capacity is served before Standard/On-demand.
+Highest priority for both committed and autoscaled capacity.
+Advanced Scheduling
+standard fair scheduling.
+Supports reservation-based fairness for idle slot distribution.
+Supports reservation-based fairness for idle slot distribution.
+Predictable Maximums
+Not supported (unless using AUTOSCALE_ONLY).
+Supports setting absolute maximum slot consumption.
+Supports setting absolute maximum slot consumption.
+BigQuery Omni Support
+Not supported in Omni regions.
+The only edition currently supported for BigQuery Omni.
+Not currently supported for Omni regions.
+Key Limitations Across All Editions
+• Minimum Capacity: All reservations and increments must be at least 50 slots.
+• Scaling Metering: Autoscaled slots are billed for a minimum of one minute whenever a scale-up event occurs.
+• Regional Scope: Commitments and reservations are regional resources and cannot be shared or moved across different regions or multi-regions.
+• Idle Slot Sharing: Idle slots can only be shared between reservations of the same edition and within the same administration project.
+• Billing Exclusions: Edition pricing applies to query compute but does not cover storage, BI Engine GiB-hour charges, or streaming insert fees
