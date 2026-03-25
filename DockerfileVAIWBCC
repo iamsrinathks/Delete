@@ -1,0 +1,291 @@
+# =============================================================================
+# Vertex AI Workbench — Slim Base + Full Standard Feature Parity
+#
+# Strategy: Start from the slim base (~2 GB, Ubuntu 24.04) and explicitly
+# install everything the standard base (~22 GB) ships, giving us:
+#   - Full auditability of every package (no opaque 22 GB blob)
+#   - Clean, targeted Trivy CVE surface
+#   - Full feature parity: CUDA, data science packages, BigQuery + Dataproc
+#     JupyterLab integrations, common system tools
+#   - Controlled, versioned, BinAuthZ-attested image in GAR
+#
+# ARCHITECTURE (from official docs — non-negotiable):
+#   jupyterlab env  → JupyterLab server + ALL JupyterLab extensions/plugins
+#   ml-gpu env      → ML frameworks + ipykernel (appears as notebook kernel)
+#   /run_jupyter.sh → MUST be called last in CMD chain
+#   Port 8080       → MUST be what JupyterLab listens on
+#
+# SECURE BOOT:
+#   NVIDIA driver NOT installed here — injected at COS host level.
+#   CUDA toolkit IS installed here — required by ML frameworks at runtime.
+# =============================================================================
+
+ARG SLIM_BASE=us-docker.pkg.dev/deeplearning-platform-release/gcr.io/workbench-container-slim:latest
+FROM ${SLIM_BASE}
+
+# ── Build args (injected by Harness CI) ──────────────────────────────────────
+ARG BUILD_DATE
+ARG GIT_COMMIT
+ARG IMAGE_VERSION
+ARG PYTHON_VERSION=3.11
+ARG CUDA_VERSION=12.6.1
+ARG CUDNN_VERSION=9
+
+# ── OCI labels ────────────────────────────────────────────────────────────────
+LABEL org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${GIT_COMMIT}" \
+      org.opencontainers.image.version="${IMAGE_VERSION}" \
+      org.opencontainers.image.base.name="workbench-container-slim:latest" \
+      com.enterprise.base-type="slim-with-standard-parity" \
+      com.enterprise.cuda.version="${CUDA_VERSION}" \
+      com.enterprise.python.version="${PYTHON_VERSION}" \
+      com.enterprise.secure-boot="host-enforced" \
+      com.enterprise.managed-by="harness-ci"
+
+# Micromamba root is set by the slim base — declare explicitly for clarity
+ENV MAMBA_ROOT_PREFIX=/opt/micromamba
+ENV DEBIAN_FRONTEND=noninteractive
+
+# =============================================================================
+# LAYER 1: System packages
+#
+# Replicates what the standard base ships over bare Ubuntu 24.04.
+# Split into logical groups so individual layers can be cached granularly
+# and Trivy can pin blame to the right layer on CVE reports.
+# =============================================================================
+
+# Common system tools (curl, git, etc. — explicitly listed in standard docs)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    wget \
+    git \
+    git-lfs \
+    unzip \
+    zip \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Build tools (needed to compile Python C-extensions, e.g. numpy, scipy)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    g++ \
+    gfortran \
+    cmake \
+    pkg-config \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Runtime libraries (required by CUDA toolkit and ML frameworks)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    libffi-dev \
+    libssl-dev \
+    libbz2-dev \
+    libreadline-dev \
+    libsqlite3-dev \
+    libncurses5-dev \
+    libgdbm-dev \
+    libnss3-dev \
+    liblzma-dev \
+    libxml2-dev \
+    libxslt1-dev \
+    libjpeg-dev \
+    libpng-dev \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Networking and debugging tools (present in standard base)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    netcat-openbsd \
+    iputils-ping \
+    dnsutils \
+    htop \
+    vim \
+    jq \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# =============================================================================
+# LAYER 2: CUDA toolkit
+#
+# The slim base is plain Ubuntu 24.04 — no CUDA at all.
+# The standard base uses nvidia/cuda:12.6.1-cudnn-devel-ubuntu24.04.
+# We install the CUDA toolkit via the official NVIDIA apt repository,
+# matching the standard base CUDA version exactly.
+#
+# IMPORTANT: We install cuda-toolkit (userspace libraries, headers, nvcc).
+#            We do NOT install the NVIDIA kernel driver — that is injected
+#            at the COS host level by cos-gpu-installer (Secure Boot path).
+# =============================================================================
+RUN curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/3bf863cc.pub \
+      | gpg --dearmor -o /usr/share/keyrings/nvidia-cuda.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/nvidia-cuda.gpg] \
+      https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/ /" \
+      > /etc/apt/sources.list.d/cuda.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+      cuda-toolkit-12-6 \
+      libcudnn9-cuda-12 \
+      libcudnn9-dev-cuda-12 \
+      libcublas-12-6 \
+      libcufft-12-6 \
+      libcurand-12-6 \
+      libcusolver-12-6 \
+      libcusparse-12-6 \
+      libnccl2 \
+      libnccl-dev \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Set CUDA paths so frameworks can find headers and libraries at build time
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH="${CUDA_HOME}/bin:${PATH}"
+ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${CUDA_HOME}/extras/CUPTI/lib64:${LD_LIBRARY_PATH}"
+
+# =============================================================================
+# LAYER 3: JupyterLab extensions (Google Cloud integrations)
+#
+# MUST be installed into the 'jupyterlab' micromamba environment.
+# The slim base already provides this env with JupyterLab pre-installed.
+# We only ADD extensions — we do not reinstall JupyterLab itself.
+#
+# Extensions installed here give us full parity with the standard base:
+#   - BigQuery JupyterLab integration
+#   - Dataproc JupyterLab integration
+#   - Notebook executor
+#   - GCS browser
+#   - Git integration
+#   - Resource usage monitor
+# =============================================================================
+RUN micromamba run -n jupyterlab \
+    pip install --no-cache-dir \
+    # ── Google Cloud JupyterLab integrations (standard base feature) ──────────
+    # BigQuery + Dataproc unified plugin (bigquery-jupyter-plugin supersedes
+    # the older dataproc-jupyter-plugin and google-cloud-jupyter-config)
+    bigquery-jupyter-plugin==1.1.4 \
+    # Vertex AI notebook executor integration
+    google-cloud-pipeline-components==2.13.0 \
+    # GCS contents manager (Cloud Storage browser in JupyterLab sidebar)
+    gcsfuse-jupyter==0.4.0 \
+    # ── Git integration ───────────────────────────────────────────────────────
+    jupyterlab-git==0.50.1 \
+    # ── Resource usage widget (CPU/RAM/GPU toolbar indicator) ─────────────────
+    jupyter-resource-usage==1.0.2 \
+    # ── LSP code completion ───────────────────────────────────────────────────
+    jupyter-lsp==2.2.5 \
+    python-lsp-server==1.11.0 \
+    # ── Notebook diff/merge ───────────────────────────────────────────────────
+    nbdime==4.0.1 \
+    # ── Disable noisy announcements banner ────────────────────────────────────
+    && micromamba run -n jupyterlab \
+    jupyter labextension disable "@jupyterlab/apputils-extension:announcements"
+
+# =============================================================================
+# LAYER 4: ML kernel environment (ml-gpu)
+#
+# This is the kernel users see in JupyterLab notebook UI.
+# All ML frameworks and data science packages live here —
+# NEVER in the jupyterlab env (dependency conflicts).
+#
+# Replicates the pre-installed data science packages the standard base
+# ships (similar to Deep Learning Containers).
+# =============================================================================
+
+# Create the isolated ml-gpu micromamba environment
+RUN micromamba create -n ml-gpu \
+    -c conda-forge \
+    -c nvidia \
+    python=${PYTHON_VERSION} \
+    -y
+
+# All subsequent RUN commands execute inside ml-gpu
+SHELL ["micromamba", "run", "-n", "ml-gpu", "/bin/bash", "-c"]
+
+# Ensure pip is up to date inside the env
+RUN micromamba install -n ml-gpu -c conda-forge pip -y \
+    && pip install --no-cache-dir --upgrade pip==24.3.1
+
+# ── PyTorch with CUDA 12.x ────────────────────────────────────────────────────
+RUN pip install --no-cache-dir \
+    torch==2.3.1+cu121 \
+    torchvision==0.18.1+cu121 \
+    torchaudio==2.3.1+cu121 \
+    --index-url https://download.pytorch.org/whl/cu121
+
+# ── TensorFlow with CUDA 12 support ──────────────────────────────────────────
+RUN pip install --no-cache-dir \
+    tensorflow[and-cuda]==2.16.1
+
+# ── JAX with CUDA 12 ──────────────────────────────────────────────────────────
+RUN pip install --no-cache-dir \
+    "jax[cuda12_pip]==0.4.26" \
+    -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+
+# ── Google Cloud SDK + Vertex AI (standard base data science packages) ────────
+RUN pip install --no-cache-dir \
+    google-cloud-aiplatform==1.53.0 \
+    google-cloud-storage==2.16.0 \
+    google-cloud-bigquery==3.21.0 \
+    google-cloud-bigquery-storage==2.25.0 \
+    google-cloud-pipeline-components==2.13.0 \
+    google-cloud-dataproc==5.9.0 \
+    google-auth==2.29.0 \
+    db-dtypes==1.2.0 \
+    bigframes==0.26.0
+
+# ── Core data science (Deep Learning Containers parity) ──────────────────────
+RUN pip install --no-cache-dir \
+    numpy==1.26.4 \
+    pandas==2.2.2 \
+    scipy==1.13.0 \
+    scikit-learn==1.4.2 \
+    statsmodels==0.14.2 \
+    pyarrow==16.0.0 \
+    polars==0.20.25 \
+    xgboost==2.0.3 \
+    lightgbm==4.3.0 \
+    catboost==1.2.5
+
+# ── Visualisation ─────────────────────────────────────────────────────────────
+RUN pip install --no-cache-dir \
+    matplotlib==3.8.4 \
+    seaborn==0.13.2 \
+    plotly==5.21.0 \
+    bokeh==3.4.1
+
+# ── Data engineering ──────────────────────────────────────────────────────────
+RUN pip install --no-cache-dir \
+    pyspark==3.5.1 \
+    dask[complete]==2024.4.2 \
+    sqlalchemy==2.0.30
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+RUN pip install --no-cache-dir \
+    tqdm==4.66.2 \
+    pydantic==2.7.1 \
+    httpx==0.27.0 \
+    rich==13.7.1 \
+    ipywidgets==8.1.2
+
+# ── Kernel registration ────────────────────────────────────────────────────────
+# Registers the ml-gpu env as a visible kernel in JupyterLab
+RUN pip install --no-cache-dir ipykernel==6.29.4 \
+    && python -m ipykernel install \
+        --prefix /opt/micromamba/envs/ml-gpu \
+        --name ml-gpu \
+        --display-name "Python ${PYTHON_VERSION} (GPU)" \
+    && rm -rf "/opt/micromamba/envs/ml-gpu/share/jupyter/kernels/python3"
+
+# Reset shell back to default after SHELL override
+SHELL ["/bin/bash", "-c"]
+
+# =============================================================================
+# LAYER 5: Startup wrapper
+#
+# Pre-flight logic (secrets, env vars, health checks) runs first,
+# then hands off to /run_jupyter.sh which MUST be called last.
+# /run_jupyter.sh configures the proxy and starts JupyterLab on port 8080.
+# =============================================================================
+COPY scripts/startup.sh /startup.sh
+RUN chmod 755 /startup.sh \
+    && chown jupyter:jupyter /startup.sh
+
+CMD ["/startup.sh"]
