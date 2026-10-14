@@ -1,0 +1,163 @@
+Understanding BigQuery Reservations: A Beginner's Guide
+
+1. Introduction: Why Manage Your BigQuery Workloads?
+
+As your organization embraces BigQuery, you'll face two common challenges: unpredictable query costs and critical jobs competing for resources with less important ones. How do you guarantee performance for your executive dashboards while a development team runs experimental queries? The answer is workload management.
+
+By default, BigQuery uses an on-demand pricing model where you pay for the data processed by each query. While simple, this can lead to unpredictable costs and resource contention as usage grows.
+
+This is where BigQuery Reservations come in. Within the capacity-based (or "flat-rate") pricing model, reservations provide a powerful way to manage your workloads by allowing you to finely tune how BigQuery allocates compute resources for your jobs.
+
+To get started, let's break down the fundamental concepts that make this powerful system work.
+
+2. The Core Components of Workload Management
+
+Understanding BigQuery's workload management system requires learning four key terms that build on one another.
+
+2.1. Slots: The Engine of BigQuery
+
+Slots are the fundamental unit of BigQuery's compute power. Think of them as the workers that execute your queries.
+
+Slots are virtual CPUs or workers that are used by BigQuery to execute your jobs.
+
+The key insight is simple: the more slots you have, the more concurrent queries you can run and the more analytical capacity you have at your disposal.
+
+2.2. Commitments: Purchasing Your Compute Power
+
+A Commitment is the purchase of a specific quantity of BigQuery compute capacity (slots) for a particular duration. This is the first step you take when moving to the capacity-based pricing model, where you secure a dedicated amount of processing power for your organization's use.
+
+2.3. Reservations: Creating Pools of Capacity
+
+A Reservation is a mechanism for partitioning your purchased slot commitments into separate, dedicated buckets or pools. The primary benefit of creating reservations is to isolate and allocate these pools of slots to different workloads, teams, or projects, ensuring that each has access to a guaranteed amount of compute power.
+
+2.4. Assignments: Linking Projects to Reservations
+
+An Assignment is the final step where you link one or more projects or folders to a specific reservation. This action directs all jobs originating from that project to use the slots allocated to its assigned reservation.
+
+Crucial Rule: If you purchase a commitment but fail to create assignments, your slots become a free-for-all, shared across the entire organization. This undermines the workload isolation that reservations are designed to provide.
+
+In short, you commit to a block of compute power, reserve portions of it for specific needs, and then assign your projects to use those reserved portions.
+
+Now that we've defined the core components, let's see how they fit together in a real-world scenario.
+
+3. How It All Works Together: A Practical Example
+
+Let's synthesize these concepts by walking through a common organizational setup.
+
+1. Purchase a Commitment: Your organization decides to move to capacity-based pricing and purchases a commitment of 3,000 slots.
+2. Create Reservations: You then split these 3,000 slots into three separate reservations to serve different business needs. You create a large reservation for your most critical work and smaller ones for other tasks.
+3. Make Assignments: Finally, you assign the projects associated with each business function to their corresponding reservation. For example, all projects used by your data scientists are assigned to the "Data Science" reservation.
+
+This setup can be visualized in the following table:
+
+Workload Reservation	Allocated Slots
+Data Science	2,000
+ELT (ETL)	500
+BI (Business Intelligence)	500
+
+The primary benefit of this structure is that it allows you to prioritize your analytical capacity. By reserving more slots for critical workloads (like Data Science), you guarantee they have the resources they need, while still providing dedicated capacity for less critical jobs.
+
+This setup doesn't just isolate workloads; it makes them efficient. Imagine the Data Science reservation is idle. If a large BI query starts, it can temporarily borrow the 2,000 idle slots from the Data Science pool. The moment a data scientist runs a job, those borrowed slots are instantly and gracefully returned to the Data Science reservation, ensuring priorities are always met.
+
+This system is already powerful, but BigQuery includes an intelligent feature that makes it even more efficient.
+
+4. The Smart Feature: Idle Slot Sharing
+
+By default, BigQuery automatically optimizes your purchased capacity through idle slot sharing. This means that jobs running in one reservation can temporarily borrow unused (idle) slots from other reservations within the same organization.
+
+For a new user, the two most important characteristics of idle slots are:
+
+* Efficient: This feature ensures that no purchased capacity ever goes to waste. BigQuery automatically puts all available slots to work, maximizing your investment.
+* Preemptable: Idle slots are not a permanent loan. The moment their original reservation needs them back, they are returned immediately. The borrowing job doesn't fail; instead, the individual units of work using those borrowed slots are gracefully paused and resumed as its own dedicated slots become free again.
+
+While this feature is enabled by default for maximum efficiency, it can be disabled using the ignore idle slot flag if a reservation requires absolute, strict resource guarantees.
+
+5. Key Rules to Remember
+
+As you begin to explore BigQuery Reservations, keep these three essential rules in mind:
+
+* Reservations are strictly for internal use and cannot be shared with other organizations.
+* Commitments are owned by one project but can be used by any project within the same organization. However, ownership of the commitment itself cannot be transferred to a different project.
+* If you purchase a commitment but do not create any assignments, the slots will be automatically shared across your entire organization.
+
+By mastering these concepts—Commitments, Reservations, and Assignments—you can move from a reactive, on-demand model to a proactive, capacity-based strategy. This gives you precise control over performance and costs, ensuring BigQuery scales effectively with your organization's needs.
+
+
+
+-------------------------
+
+To manage capacity-based billing in BigQuery, you need specific Identity and Access Management (IAM) permissions depending on whether you are purchasing capacity, creating resource pools, or assigning workloads.
+Creating and Managing Reservations
+To create a standard slot reservation, you must have the bigquery.reservations.create permission on the administration project that owns the commitments. The predefined roles that include this permission are BigQuery Resource Editor and BigQuery Resource Admin. If you intend to create predictable reservations with absolute maximums, you also need the bigquery.config.update permission on the admin project to enable reservation-based fairness. To update or delete existing reservations, you need bigquery.reservations.update and bigquery.reservations.delete respectively.
+Purchasing and Managing Commitments
+To purchase dedicated capacity, you need the bigquery.capacityCommitments.create permission on the administration project. This permission is contained within the BigQuery Admin and BigQuery Resource Admin predefined roles. For ongoing management, such as renewing, splitting, or merging commitments, the bigquery.capacityCommitments.update permission is required.
+Creating and Managing Assignments
+To assign a project, folder, or organization to a reservation, you must have the bigquery.reservationAssignments.create permission on both the administration project and the assignee (the resource being assigned). Predefined roles including this permission are BigQuery Admin, BigQuery Resource Admin, and BigQuery Resource Editor. To move or delete assignments, you additionally need bigquery.reservationAssignments.delete. To view or find existing assignments, the bigquery.reservationAssignments.list permission is required.
+BI Engine Reservations
+To create or delete reservations specifically for BI Engine in-memory acceleration, you must be granted the BigQuery Resource Admin (roles/bigquery.resourceAdmin) role on the project.
+Using and Overriding Reservations
+For a user to manually override a default reservation and specify a different one for a specific query job (at runtime via SQL or CLI), they must have the bigquery.reservations.use permission. This permission is provided by the BigQuery Resource Admin and BigQuery Resource Editor roles.
+Summary Table of Required Roles
+Task
+Required Predefined Roles
+Purchase Commitments
+BigQuery Admin, BigQuery Resource Admin
+Create Reservations
+BigQuery Resource Admin, BigQuery Resource Editor
+Create Assignments
+BigQuery Admin, BigQuery Resource Admin, BigQuery Resource Editor
+Manage BI Engine
+BigQuery Resource Admin
+Override/Use Slots
+BigQuery Resource Admin, BigQuery Resource Editor
+
+
+
+
+The following table outlines the features and limitations of the three BigQuery editions (Standard, Enterprise, and Enterprise Plus) based on the provided sources:
+Feature / Category
+Standard Edition
+Enterprise Edition
+Enterprise Plus Edition
+Pay-As-You-Go Rate (us-central1)
+$0.04 per slot-hour.
+$0.06 per slot-hour.
+$0.10 per slot-hour.
+Slot Commitments
+Not supported; only pay-as-you-go is available.
+Supported for 1-year or 3-year durations at discounted rates.
+Supported for 1-year or 3-year durations at discounted rates.
+Baseline Slots
+Not supported; all capacity must be autoscaled.
+Supported, providing guaranteed capacity that is always available.
+Supported, providing guaranteed capacity that is always available.
+Workload Management
+Limited to project-level assignments.
+Supports Project, Folder, and Organization-level assignments.
+Supports Project, Folder, and Organization-level assignments.
+Job Type Support
+Supports standard analytical queries and pipelines.
+Supports BigQuery ML, CDC, metadata caching, and search index refresh.
+Supports all Enterprise job types plus Gemini in BigQuery.
+Regional Contention Priority
+Lowest priority, shared with on-demand capacity.
+High priority; committed capacity is served before Standard/On-demand.
+Highest priority for both committed and autoscaled capacity.
+Advanced Scheduling
+standard fair scheduling.
+Supports reservation-based fairness for idle slot distribution.
+Supports reservation-based fairness for idle slot distribution.
+Predictable Maximums
+Not supported (unless using AUTOSCALE_ONLY).
+Supports setting absolute maximum slot consumption.
+Supports setting absolute maximum slot consumption.
+BigQuery Omni Support
+Not supported in Omni regions.
+The only edition currently supported for BigQuery Omni.
+Not currently supported for Omni regions.
+Key Limitations Across All Editions
+• Minimum Capacity: All reservations and increments must be at least 50 slots.
+• Scaling Metering: Autoscaled slots are billed for a minimum of one minute whenever a scale-up event occurs.
+• Regional Scope: Commitments and reservations are regional resources and cannot be shared or moved across different regions or multi-regions.
+• Idle Slot Sharing: Idle slots can only be shared between reservations of the same edition and within the same administration project.
+• Billing Exclusions: Edition pricing applies to query compute but does not cover storage, BI Engine GiB-hour charges, or streaming insert fees
