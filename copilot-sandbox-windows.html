@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Copilot Local Sandboxing on Windows</title>
+<style>
+:root{
+  --bg:#f6f7f9; --card:#ffffff; --ink:#1b2430; --muted:#5d6b7c; --line:#c9d1db;
+  --edge:#8a97a8; --accent:#0a7d5a; --accent-bg:#e3f5ee;
+  --bad:#c0392b; --bad-bg:#fdeceb; --warn:#a86a00; --warn-bg:#fff3dc;
+  --c1:#3b6fd4; --c2:#7a4fc9; --c3:#0a7d5a; --c4:#c26a14; --c5:#b0366f; --c6:#4a5a6e;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#10151c; --card:#18202a; --ink:#e6ebf1; --muted:#9aa8b8; --line:#2f3b4a;
+    --edge:#6c7b8e; --accent:#3ecf9b; --accent-bg:#12352b;
+    --bad:#ff7b6b; --bad-bg:#3a1a18; --warn:#f0b24a; --warn-bg:#3a2d12;
+    --c1:#7da3f2; --c2:#b497ee; --c3:#3ecf9b; --c4:#f0a05a; --c5:#ee7fb2; --c6:#9fb0c4;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1120px;margin:0 auto;padding:24px 16px 56px}
+header h1{margin:0 0 6px;font-size:1.8rem}
+header p{margin:0;color:var(--muted);max-width:70ch}
+h2{margin:36px 0 12px;font-size:1.25rem}
+h3{margin:0 0 8px;font-size:1rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+.pill{display:inline-block;font-size:.75rem;font-weight:700;padding:2px 9px;border-radius:99px;background:var(--accent-bg);color:var(--accent)}
+code{font:0.85em ui-monospace,Consolas,monospace;background:rgba(127,140,160,.18);padding:1px 5px;border-radius:4px}
+ul.tight{margin:0;padding-left:1.1em}
+ul.tight li{margin:0 0 6px}
+.diagram{overflow-x:auto}
+.diagram svg{width:100%;min-width:820px;height:auto;display:block}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:.85rem;color:var(--muted);margin-top:10px}
+.legend i{display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:-2px;margin-right:6px;border:2px solid var(--line)}
+
+/* SVG */
+.node rect{fill:var(--card);stroke-width:1.6;transition:opacity .2s,stroke .2s,fill .2s}
+.node.c1 rect{stroke:var(--c1)} .node.c2 rect{stroke:var(--c2)} .node.c3 rect{stroke:var(--c3)}
+.node.c4 rect{stroke:var(--c4)} .node.c5 rect{stroke:var(--c5)} .node.c6 rect{stroke:var(--c6)}
+.node text{pointer-events:none;text-anchor:middle}
+.t{font:700 13px system-ui,sans-serif;fill:var(--ink)}
+.s{font:11px system-ui,sans-serif;fill:var(--muted)}
+.hd{font:700 11px system-ui,sans-serif;fill:var(--muted);letter-spacing:.06em}
+.node,.edge{transition:opacity .2s}
+.node.dim,.edge.dim{opacity:.2}
+.node.hl rect{stroke:var(--accent);stroke-width:3;fill:var(--accent-bg)}
+.node.bad rect{stroke:var(--bad);stroke-width:3;fill:var(--bad-bg)}
+.edge{fill:none;stroke:var(--edge);stroke-width:1.5;marker-end:url(#arr)}
+.edge.soft{stroke-dasharray:4 4}
+.edge.hl{stroke:var(--accent);stroke-width:2.6;stroke-dasharray:7 5;animation:flow 1s linear infinite}
+#arr path{fill:var(--edge)}
+@keyframes flow{to{stroke-dashoffset:-24}}
+@media (prefers-reduced-motion: reduce){.edge.hl{animation:none}}
+
+/* Scenario */
+.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+select{flex:1 1 280px;min-width:0;font:inherit;padding:9px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+button{font:inherit;padding:9px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
+button:hover{border-color:var(--accent)}
+select:focus-visible,button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.panel{display:grid;gap:14px;grid-template-columns:1.3fr 1fr}
+@media (max-width:760px){.panel{grid-template-columns:1fr}}
+.badge{display:inline-block;font-size:.78rem;font-weight:700;padding:3px 10px;border-radius:99px}
+.badge.ok{background:var(--accent-bg);color:var(--accent)}
+.badge.warn{background:var(--warn-bg);color:var(--warn)}
+.badge.error{background:var(--bad-bg);color:var(--bad)}
+.panel ol{margin:8px 0 0;padding-left:1.3em}
+.panel ol li{margin:0 0 7px}
+.box{border-left:4px solid var(--line);padding:6px 12px;margin:0 0 12px;background:rgba(127,140,160,.08);border-radius:0 8px 8px 0}
+.box.res{border-color:var(--accent)} .box.fix{border-color:var(--c1)}
+.box b{display:block;font-size:.78rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:.92rem}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-size:.78rem;text-transform:uppercase;letter-spacing:.05em}
+footer{margin-top:40px;color:var(--muted);font-size:.85rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Copilot Local Sandboxing on Windows 11: How It Works</h1>
+  <p>This page explains the rollout runbook for about 700 developers on Windows 11 only. Linux, WSL2 and macOS are left out for now. Pick a scenario below. The diagram shows the path.</p>
+</header>
+
+<h2>The idea in three points</h2>
+<div class="grid">
+  <div class="card"><h3>1. Isolate the agent</h3>
+    <p>The sandbox wraps each process that the Copilot agent starts. This includes shell commands and local MCP servers. It limits files, network, and credentials.</p></div>
+  <div class="card"><h3>2. Push policy from three places</h3>
+    <p>Intune, the <code>.github-private</code> repo, and a managed file in <code>%ProgramFiles%</code> can all send settings. For the <code>sandbox</code> key, Copilot combines every source and the most restrictive value wins.</p></div>
+  <div class="card"><h3>3. Roll out in rings</h3>
+    <p>The team starts in observe mode on Windows. Ring 0 records what the sandbox blocks and allows it. Ring 1 already blocks and records. Ring 3 removes the bypass.</p></div>
+</div>
+
+<h2>Architecture and data flow</h2>
+<div class="card">
+  <div class="diagram">
+  <svg viewBox="0 0 1000 560" role="img" aria-label="Architecture diagram: policy sources flow to a merge step, a version gate, Copilot clients, sandbox engines, and the resources the sandbox limits.">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>
+    </defs>
+
+    <text class="hd" x="20" y="24">1 · SOURCES</text>
+    <text class="hd" x="240" y="24">2 · WHERE POLICY LANDS</text>
+    <text class="hd" x="440" y="24">3 · MERGE AND GATE</text>
+    <text class="hd" x="710" y="24">4 · CLIENTS</text>
+    <text class="hd" x="845" y="24">5 · ENGINE</text>
+    <text class="hd" x="20" y="344">6 · LIMITS</text>
+
+    <!-- Edges -->
+    <path class="edge" data-a="n-intune" data-b="n-reg" d="M190 70 H240"/>
+    <path class="edge" data-a="n-ghp" data-b="n-srv" d="M190 180 H240"/>
+    <path class="edge" data-a="n-image" data-b="n-file" d="M190 290 H240"/>
+    <path class="edge" data-a="n-reg" data-b="n-merge" d="M410 70 H430 V150 H440"/>
+    <path class="edge" data-a="n-srv" data-b="n-merge" d="M410 180 H440"/>
+    <path class="edge" data-a="n-file" data-b="n-merge" d="M410 290 H430 V190 H440"/>
+    <path class="edge" data-a="n-merge" data-b="n-gate" d="M560 160 H585"/>
+    <path class="edge" data-a="n-merge" data-b="n-perm" d="M500 200 V240"/>
+    <path class="edge" data-a="n-gate" data-b="n-cli" d="M675 160 H692 V70 H710"/>
+    <path class="edge" data-a="n-gate" data-b="n-app" d="M675 160 H710"/>
+    <path class="edge" data-a="n-gate" data-b="n-vsc" d="M675 160 H692 V250 H710"/>
+    <path class="edge" data-a="n-cli" data-b="n-win" d="M820 70 H832 V95 H845"/>
+    <path class="edge" data-a="n-app" data-b="n-win" d="M820 160 H832 V95 H845"/>
+    <path class="edge" data-a="n-vsc" data-b="n-win" d="M820 250 H832 V95 H845"/>
+    <path class="edge" data-a="n-win" data-b="n-fs" d="M965 95 H980 V340 H120 V370"/>
+    <path class="edge" data-a="n-win" data-b="n-net" d="M965 95 H980 V340 H350 V370"/>
+    <path class="edge" data-a="n-win" data-b="n-cred" d="M965 95 H980 V340 H580 V370"/>
+    <path class="edge" data-a="n-win" data-b="n-mcp" d="M965 95 H980 V340 H835 V370"/>
+    <path class="edge" data-a="n-net" data-b="n-proxy" d="M350 430 V480"/>
+    <path class="edge" data-a="n-proxy" data-b="n-hosts" d="M450 510 H480"/>
+    <path class="edge soft" data-a="n-mcp" data-b="n-otel" d="M835 430 V480"/>
+
+    <!-- Nodes: sources -->
+    <g class="node c1" id="n-intune"><rect x="20" y="40" width="170" height="60" rx="10"/><text class="t" x="105" y="66">Intune (MDM)</text><text class="s" x="105" y="84">Device groups = rings</text></g>
+    <g class="node c2" id="n-ghp"><rect x="20" y="150" width="170" height="60" rx="10"/><text class="t" x="105" y="176">.github-private</text><text class="s" x="105" y="194">PR + CODEOWNERS</text></g>
+    <g class="node c3" id="n-image"><rect x="20" y="260" width="170" height="60" rx="10"/><text class="t" x="105" y="286">Windows 11 build</text><text class="s" x="105" y="304">KB5124010 / KB5124006</text></g>
+
+    <!-- landing -->
+    <g class="node c1" id="n-reg"><rect x="240" y="40" width="170" height="60" rx="10"/><text class="t" x="325" y="66">Windows registry</text><text class="s" x="325" y="84">HKLM Policies key</text></g>
+    <g class="node c2" id="n-srv"><rect x="240" y="150" width="170" height="60" rx="10"/><text class="t" x="325" y="176">Server-managed</text><text class="s" x="325" y="194">Signed-in users only</text></g>
+    <g class="node c3" id="n-file"><rect x="240" y="260" width="170" height="60" rx="10"/><text class="t" x="325" y="286">%ProgramFiles%</text><text class="s" x="325" y="304">GitHubCopilot\managed-settings.json</text></g>
+
+    <!-- merge, gate, approvals -->
+    <g class="node c4" id="n-merge"><rect x="440" y="120" width="120" height="80" rx="10"/><text class="t" x="500" y="148">Policy merge</text><text class="s" x="500" y="166">sandbox key: most</text><text class="s" x="500" y="182">restrictive wins</text></g>
+    <g class="node c4" id="n-gate"><rect x="585" y="120" width="90" height="80" rx="10"/><text class="t" x="630" y="148">Version gate</text><text class="s" x="630" y="166">Below minimum</text><text class="s" x="630" y="182">= no Copilot</text></g>
+    <g class="node c4" id="n-perm"><rect x="440" y="240" width="235" height="56" rx="10"/><text class="t" x="558" y="264">Approval rules</text><text class="s" x="558" y="282">permissions.ask · MCP allowlist</text></g>
+
+    <!-- clients -->
+    <g class="node c5" id="n-cli"><rect x="710" y="45" width="110" height="50" rx="10"/><text class="t" x="765" y="66">Copilot CLI</text><text class="s" x="765" y="83">1.0.93 or later</text></g>
+    <g class="node c5" id="n-app"><rect x="710" y="135" width="110" height="50" rx="10"/><text class="t" x="765" y="156">Copilot app</text><text class="s" x="765" y="173">1.1.26 or later</text></g>
+    <g class="node c5" id="n-vsc"><rect x="710" y="225" width="110" height="50" rx="10"/><text class="t" x="765" y="246">VS Code</text><text class="s" x="765" y="263">1.141.0 or later</text></g>
+
+    <!-- engines -->
+    <g class="node c6" id="n-win"><rect x="845" y="60" width="120" height="70" rx="10"/><text class="t" x="905" y="90">Windows engine</text><text class="s" x="905" y="108">MXC BaseContainer</text></g>
+
+    <!-- limits -->
+    <g class="node c3" id="n-fs"><rect x="20" y="370" width="200" height="60" rx="10"/><text class="t" x="120" y="396">Filesystem</text><text class="s" x="120" y="414">Deny by default; workdir writable</text></g>
+    <g class="node c3" id="n-net"><rect x="250" y="370" width="200" height="60" rx="10"/><text class="t" x="350" y="396">Network</text><text class="s" x="350" y="414">userPolicy.network host rules</text></g>
+    <g class="node c3" id="n-cred"><rect x="480" y="370" width="200" height="60" rx="10"/><text class="t" x="580" y="396">Git and gh credentials</text><text class="s" x="580" y="414">Placeholders, proxy swaps</text></g>
+    <g class="node c3" id="n-mcp"><rect x="710" y="370" width="250" height="60" rx="10"/><text class="t" x="835" y="396">Local MCP and LSP servers</text><text class="s" x="835" y="414">Run inside the sandbox</text></g>
+
+    <!-- outside -->
+    <g class="node c6" id="n-proxy"><rect x="250" y="480" width="200" height="60" rx="10"/><text class="t" x="350" y="506">Corporate proxy</text><text class="s" x="350" y="524">The real egress control</text></g>
+    <g class="node c6" id="n-hosts"><rect x="480" y="480" width="200" height="60" rx="10"/><text class="t" x="580" y="506">Allowed hosts</text><text class="s" x="580" y="524">github.com, Artifactory</text></g>
+    <g class="node c6" id="n-otel"><rect x="710" y="480" width="250" height="60" rx="10"/><text class="t" x="835" y="506">OTel collector + audit log</text><text class="s" x="835" y="524">Posture, counts, outcomes</text></g>
+  </svg>
+  </div>
+  <div class="legend">
+    <span><i style="border-color:var(--accent);background:var(--accent-bg)"></i>On the path</span>
+    <span><i style="border-color:var(--bad);background:var(--bad-bg)"></i>Problem point</span>
+    <span><i style="opacity:.3"></i>Not used in this scenario</span>
+  </div>
+</div>
+
+<h2>Scenario explorer</h2>
+<div class="card">
+  <div class="controls">
+    <button id="prev" type="button" aria-label="Previous scenario">&larr; Prev</button>
+    <select id="sel" aria-label="Choose a scenario"></select>
+    <button id="next" type="button" aria-label="Next scenario">Next &rarr;</button>
+  </div>
+  <div class="panel">
+    <div>
+      <span id="badge" class="badge ok">Overview</span>
+      <h3 id="ttl" style="margin-top:8px">Pick a scenario</h3>
+      <p id="trg" style="margin:4px 0;color:var(--muted)">Use the list above. The diagram shows the path for each case.</p>
+      <ol id="steps"></ol>
+    </div>
+    <div>
+      <div class="box res"><b>Result</b><span id="res">The full architecture shows now.</span></div>
+      <div class="box fix"><b>What to do</b><span id="fix">Start with "Normal command in Ring 2".</span></div>
+    </div>
+  </div>
+</div>
+
+<h2>Documentation</h2>
+<div class="grid">
+  <div class="card">
+    <h3>Deliver policy</h3>
+    <ul class="tight">
+      <li><b>Intune</b> writes <code>sandbox.*</code> values to the registry.</li>
+      <li>Intune targets device groups. These match the rings.</li>
+      <li>The <b><code>.github-private</code> repo</b> holds org-wide keys.</li>
+      <li>A <b>managed file</b> in <code>%ProgramFiles%\GitHubCopilot</code> is a second device channel. It loads at client start.</li>
+      <li>Most keys follow MDM, then server, then file, then user. The <code>sandbox</code> key is combined from all layers, and the <b>most restrictive</b> value wins.</li>
+      <li>For <code>sandbox</code>, a looser layer cannot undo a stricter layer.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Before you start</h3>
+    <ul class="tight">
+      <li>Update Windows. 25H2 needs KB5124010 (build 26200.9550) or later. 26H1 needs KB5124006 or later.</li>
+      <li>GitHub's prerequisite does not name 24H2. Check Microsoft's support matrix before you include it.</li>
+      <li>Upgrade clients first: VS Code 1.141.0, CLI 1.0.93, app 1.1.26. Audit pinned <b>VDI images</b> <b>before</b> any <code>sandbox</code> key is assigned. Older clients lose Copilot.</li>
+      <li>Put the baseline (<code>enabled</code>, <code>failIfUnavailable</code>, <code>allowBypass</code>, <code>forceRemoteSettingsRefresh</code>) in Intune and the file, so it applies before sign-in. Use server team overrides only for specialisation. They wrap the whole <code>sandbox</code> object in <code>overridable</code>, and the most-restrictive rule still applies.</li>
+      <li>Create the ring teams. Test any exempt-team override first. Team overrides work for server-managed settings only, and <code>sandbox</code> support is only partly documented.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Key settings</h3>
+    <ul class="tight">
+      <li><code>sandbox.enabled</code> forces the sandbox on.</li>
+      <li><code>learningMode</code> sets <code>allow</code> or <code>deny</code>. It works on Windows only. <code>allow</code> is accepted only through Intune or the registry, not the file.</li>
+      <li><code>failIfUnavailable</code>, with <code>enabled</code>, blocks model and tool execution when the sandbox cannot be enforced.</li>
+      <li><code>allowBypass</code> controls the one-off bypass prompt. <code>false</code> also blocks <code>/sandbox disable</code> in the CLI.</li>
+      <li><code>userPolicy.network.allowedHosts</code> lists the hosts a command may reach. Outbound stays open until a list is set.</li>
+      <li>Keep <code>addCurrentWorkingDirectory</code> on. Turning it off removes access to <code>.git</code>, so <code>git status</code>, <code>add</code>, <code>commit</code> and <code>diff</code> fail unless you grant <code>.git</code> by hand.</li>
+      <li>On Windows, keep <code>allowLocalNetwork</code> on when host rules, an upstream proxy or credential masking are used. Sandboxed processes reach the CLI's local proxy over loopback.</li>
+      <li><code>forceRemoteSettingsRefresh</code> requires a fresh policy at startup and fails closed. VS Code blocks Copilot. The CLI limits MCP servers and bypass mode until a fetch works.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Known risks</h3>
+    <ul class="tight">
+      <li>Old clients lose Copilot when the <code>sandbox</code> key arrives.</li>
+      <li>Windows host rules are soft. The <b>corporate proxy</b> is the real control.</li>
+      <li>Built-in file tools run outside the sandbox.</li>
+      <li><b>Observe with telemetry too.</b> Set managed <code>telemetry</code> with <code>capture.identity</code> and <code>policyDetail</code> to <code>true</code>. <code>policyDetail</code> exports raw sandbox filesystem paths, so turn it off once the allow-lists are settled.</li>
+      <li>Remote MCP servers run outside the sandbox.</li>
+      <li>An allowed host can still carry data out.</li>
+      <li>Model refusals are not a control.</li>
+    </ul>
+  </div>
+</div>
+
+<h2>Rollout rings</h2>
+<div class="card" style="overflow-x:auto">
+  <table>
+    <thead><tr><th>Ring</th><th>Who</th><th>Mode</th><th>Move on when</th></tr></thead>
+    <tbody>
+      <tr><td><b>0</b></td><td>Platform team</td><td>Observe on Windows. <code>learningMode: allow</code> records and allows. No file protection.</td><td>All devices show the sandbox on. No open P1 incident.</td></tr>
+      <tr><td><b>1</b></td><td>Pilot squads</td><td>Enforce and record. <code>learningMode: deny</code> blocks and logs. Bypass prompts allowed.</td><td>Two weeks of data. InfoSec reviews the allowlist. Fewer than 3 tickets per 100 users per week.</td></tr>
+      <tr><td><b>2</b></td><td>Early majority</td><td>Balanced. Enforced. Bypass prompts allowed.</td><td>No build regressions. Bypass approvals fall each week.</td></tr>
+      <tr><td><b>3</b></td><td>Everyone</td><td>Enterprise baseline in Intune and the file. The server key adds review and team overrides.</td><td>At least 98% of users run the minimum client version first.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<footer>Source: Copilot Sandboxing Rollout Runbook, 14 Oct 2026. Checked against official GitHub, VS Code and Microsoft pages on 15 Oct 2026. Local sandboxing has been generally available since 7 Oct 2026. Ring sizes, thresholds and the points on allowed hosts and model refusals are team proposals. Check GitHub and MXC docs before each ring.</footer>
+</div>
+
+<script>
+(function(){
+  var S = [
+    {
+      t:"Normal command in Ring 2 (Balanced)", st:"ok", badge:"Works as planned",
+      trg:"A developer asks the agent to run npm install.",
+      nodes:["n-intune","n-reg","n-merge","n-gate","n-cli","n-win","n-fs","n-net","n-proxy","n-hosts"], bad:[],
+      steps:[
+        "Intune writes the sandbox values to the registry.",
+        "Copilot reads the values every hour. It needs no restart.",
+        "The client passes the version gate.",
+        "The agent runs <code>npm install</code>.",
+        "The sandbox lets the command write inside the working directory.",
+        "The sandbox sends traffic only to hosts on the allowlist, when one is set.",
+        "The corporate proxy checks the traffic a second time."
+      ],
+      res:"The command works. The sandbox blocks file access outside its grants and hosts outside the allowlist.",
+      fix:"No action. Run <code>/sandbox policy</code> to check the values."
+    },
+    {
+      t:"Ring 0 observe mode (learningMode allow)", st:"warn", badge:"Works, with no file protection",
+      trg:"The platform team tests the sandbox on trusted repos.",
+      nodes:["n-intune","n-reg","n-merge","n-gate","n-cli","n-win","n-fs","n-net","n-mcp","n-otel"], bad:[],
+      steps:[
+        "Intune sets <code>learningMode</code> to <code>allow</code>. The managed file ignores this value.",
+        "The sandbox allows all file and process access.",
+        "The sandbox records each access that policy would block.",
+        "Network rules still apply.",
+        "Telemetry sends counts to the OTel collector.",
+        "The team reads the records. It builds the allowlist from them."
+      ],
+      res:"Nothing breaks. The sandbox gives no file protection in this mode.",
+      fix:"Use this mode in Ring 0 only. Ring 1 uses <code>deny</code>, which blocks and records."
+    },
+    {
+      t:"Client is below the minimum version", st:"error", badge:"Fails: Copilot blocked",
+      trg:"The team adds the sandbox key to the server file. A user runs VS Code 1.138.",
+      nodes:["n-ghp","n-srv","n-merge","n-vsc"], bad:["n-gate"],
+      steps:[
+        "The platform team commits the <code>sandbox</code> key to <code>.github-private</code>.",
+        "The client fetches the server settings.",
+        "The version gate compares the client version with the minimum.",
+        "VS Code 1.138 is below 1.141.0.",
+        "The gate blocks Copilot for that user."
+      ],
+      res:"The user cannot use Copilot until the client updates.",
+      fix:"Upgrade clients before each ring. Check that 98% of users meet the minimum first."
+    },
+    {
+      t:"Windows device below the required build", st:"error", badge:"Fails: commands stop",
+      trg:"Intune sends enabled=true to a device with an old build.",
+      nodes:["n-intune","n-reg","n-merge","n-cli"], bad:["n-win"],
+      steps:[
+        "Intune sets <code>sandbox.enabled</code> to <code>true</code> on the device.",
+        "The device lacks KB5124010 (25H2) or KB5124006 (26H1).",
+        "The engine cannot start.",
+        "MDM still forces the sandbox on.",
+        "Sandboxed commands fail. Copilot never runs them outside the sandbox."
+      ],
+      res:"The user sees \"sandboxing not supported\". Agent commands fail.",
+      fix:"Add an Intune compliance rule for the build number. Exclude failing devices from the ring."
+    },
+    {
+      t:"Host is not on the allowlist", st:"warn", badge:"Blocked by design",
+      trg:"The agent runs curl to a host that is not listed.",
+      nodes:["n-intune","n-reg","n-merge","n-gate","n-cli","n-win","n-hosts"], bad:["n-net"],
+      steps:[
+        "The agent starts a network call from the sandbox.",
+        "The sandbox compares the host with the allowlist.",
+        "The user list and the managed list <b>intersect</b>.",
+        "The host is missing, so the sandbox denies the call.",
+        "The build can look hung. The cause is a silent denial."
+      ],
+      res:"The command fails. If the two lists do not overlap, the sandbox denies all hosts.",
+      fix:"Add the host from Phase 1 data. Test with a new user profile. Tell L1 support about silent denials."
+    },
+    {
+      t:"Agent edits .git/config", st:"warn", badge:"Works, with an approval prompt",
+      trg:"The agent tries to change core.fsmonitor.",
+      nodes:["n-srv","n-merge","n-cli","n-win","n-fs"], bad:["n-perm"],
+      steps:[
+        "The sandbox gives the agent write access to <code>.git</code>.",
+        "A changed <code>core.fsmonitor</code> can run code outside the sandbox later (Git behaviour, not from the Copilot docs).",
+        "The rule <code>Edit(**/.git/config)</code> matches the edit.",
+        "Copilot asks the user to approve the edit.",
+        "The user reads the change. The user approves or denies it."
+      ],
+      res:"A person reviews each write that matches the rule.",
+      fix:"Keep the <code>ask</code> rules. Check in Ring 0 that the <code>**/</code> globs match inside every repo."
+    },
+    {
+      t:"Blocked command and the bypass prompt", st:"warn", badge:"Works, with a prompt",
+      trg:"A command needs a path outside the workspace.",
+      nodes:["n-reg","n-merge","n-cli","n-win"], bad:["n-fs"],
+      steps:[
+        "The sandbox blocks the write outside the workspace.",
+        "<code>allowBypass</code> is unset, so the CLI shows a prompt.",
+        "The user approves. On supported Windows hosts the retry first runs as <b>sandbox relaxed</b>. File and process rules loosen. Network rules stay.",
+        "If the command still fails, the CLI can offer a full bypass, labelled <b>sandbox bypassed</b>. A bypass skips credential masking.",
+        "The Strict profile sets <code>allowBypass</code> to <code>false</code>. No prompt appears, and <code>/sandbox disable</code> is refused."
+      ],
+      res:"Users can finish work in Ring 2. The team tracks each bypass.",
+      fix:"Watch bypass counts each week. Set <code>allowBypass: false</code> for Ring 3 and regulated repos."
+    },
+    {
+      t:"Server fetch fails with forceRemoteSettingsRefresh", st:"error", badge:"Fails: Copilot blocked",
+      trg:"A user starts VS Code offline after Phase 3.",
+      nodes:["n-ghp","n-merge","n-gate","n-vsc"], bad:["n-srv"],
+      steps:[
+        "Phase 3 sets <code>forceRemoteSettingsRefresh</code> to <code>true</code>.",
+        "VS Code starts without a network.",
+        "The settings fetch fails.",
+        "The setting fails closed. The CLI has done this since 1.0.81 (27 Aug 2026). GitHub announced it for the CLI, VS Code and the app on 13 Oct 2026.",
+        "VS Code Copilot stays blocked until a fetch works. The CLI limits MCP servers and bypass mode instead."
+      ],
+      res:"Travelling or offline users lose Copilot in VS Code.",
+      fix:"Enable the setting only after Phase 3. Warn travelling users. Intune and file layers still load from the device. Deliver the setting through Intune or the file so it applies from the first start. A server-managed value applies from the second startup."
+    },
+    {
+      t:"Git commands fail after the working directory is turned off", st:"error", badge:"Fails: Git stops",
+      trg:"A team sets addCurrentWorkingDirectory to false, then the agent runs git status.",
+      nodes:["n-intune","n-reg","n-merge","n-gate","n-cli","n-win"], bad:["n-fs"],
+      steps:[
+        "A policy sets <code>addCurrentWorkingDirectory</code> to <code>false</code>.",
+        "The sandbox no longer adds the working directory to the read/write paths.",
+        "It also removes access to everything in and below <code>.git</code>.",
+        "The agent runs <code>git status</code>, <code>add</code>, <code>commit</code> or <code>diff</code>.",
+        "The command fails inside the sandbox."
+      ],
+      res:"Git commands fail until <code>.git</code> is granted by hand.",
+      fix:"Keep <code>addCurrentWorkingDirectory</code> on. If you must turn it off, add the <code>.git</code> path to <code>readwritePaths</code>."
+    },
+    {
+      t:"Rollback after a problem in a ring", st:"ok", badge:"Safe exit",
+      trg:"Tickets rise. The platform team stops the ring.",
+      nodes:["n-intune","n-reg","n-ghp","n-srv","n-merge"], bad:[],
+      steps:[
+        "The platform team runs the rollback remediation.",
+        "The script deletes the <code>sandbox.*</code> values under <code>HKLM\\SOFTWARE\\Policies\\GitHubCopilot</code>.",
+        "Check whether removing a device from the Intune group clears these values. The GitHub docs do not say. It depends on how your policy writes them.",
+        "For server settings, the team reverts the <code>.github-private</code> commit.",
+        "Clients pick up the change within one hour."
+      ],
+      res:"Users keep working. They work without the sandbox.",
+      fix:"Find the cause in the ring data. Fix it. Then start the ring again."
+    }
+  ];
+
+  var sel = document.getElementById("sel");
+  var nodes = document.querySelectorAll(".node");
+  var edges = document.querySelectorAll(".edge");
+  var el = {
+    badge: document.getElementById("badge"), ttl: document.getElementById("ttl"),
+    trg: document.getElementById("trg"), steps: document.getElementById("steps"),
+    res: document.getElementById("res"), fix: document.getElementById("fix")
+  };
+
+  var o = document.createElement("option");
+  o.value = "-1"; o.textContent = "All components (overview)";
+  sel.appendChild(o);
+  S.forEach(function(s, i){
+    var op = document.createElement("option");
+    op.value = String(i);
+    op.textContent = (i + 1) + ". " + s.t;
+    sel.appendChild(op);
+  });
+
+  function show(i){
+    var k;
+    if (i < 0){
+      nodes.forEach(function(n){ n.classList.remove("dim","hl","bad"); });
+      edges.forEach(function(e){ e.classList.remove("dim","hl"); });
+      el.badge.className = "badge ok"; el.badge.textContent = "Overview";
+      el.ttl.textContent = "Pick a scenario";
+      el.trg.textContent = "Use the list above. The diagram shows the path for each case.";
+      el.steps.innerHTML = "";
+      el.res.textContent = "The full architecture shows now.";
+      el.fix.innerHTML = "Start with \"Normal command in Ring 2\".";
+      return;
+    }
+    var sc = S[i];
+    var bad = sc.bad || [];
+    var set = {};
+    sc.nodes.concat(bad).forEach(function(id){ set[id] = true; });
+    nodes.forEach(function(n){
+      var on = !!set[n.id], isBad = bad.indexOf(n.id) > -1;
+      n.classList.toggle("dim", !on);
+      n.classList.toggle("bad", isBad);
+      n.classList.toggle("hl", on && !isBad);
+    });
+    edges.forEach(function(e){
+      var on = set[e.getAttribute("data-a")] && set[e.getAttribute("data-b")];
+      e.classList.toggle("dim", !on);
+      e.classList.toggle("hl", !!on);
+    });
+    el.badge.className = "badge " + sc.st;
+    el.badge.textContent = sc.badge;
+    el.ttl.textContent = sc.t;
+    el.trg.textContent = sc.trg;
+    el.steps.innerHTML = "";
+    sc.steps.forEach(function(txt){
+      var li = document.createElement("li");
+      li.innerHTML = txt;
+      el.steps.appendChild(li);
+    });
+    el.res.innerHTML = sc.res;
+    el.fix.innerHTML = sc.fix;
+  }
+
+  function go(d){
+    var n = S.length + 1;
+    var cur = parseInt(sel.value, 10) + 1;
+    cur = (cur + d + n) % n;
+    sel.value = String(cur - 1);
+    show(cur - 1);
+  }
+
+  sel.addEventListener("change", function(){ show(parseInt(sel.value, 10)); });
+  document.getElementById("prev").addEventListener("click", function(){ go(-1); });
+  document.getElementById("next").addEventListener("click", function(){ go(1); });
+
+  sel.value = "0";
+  show(0);
+})();
+</script>
+</body>
+</html>
