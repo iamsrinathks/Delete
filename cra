@@ -1,0 +1,3 @@
+GitHub’s changelog says local sandboxing is GA across the CLI, the Copilot app and VS Code Agent Host sessions. But the VS Code documentation page you gave me has a separate line: “Windows support is Experimental.”
+
+So the two GitHub sources don’t fully agree. The GA announcement covers the feature in general, while the VS Code page treats the Windows part as still experimental.
