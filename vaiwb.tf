@@ -416,7 +416,8 @@ labels = {
 └─────────────────────────────────────────────────────────────────┘
 
 
-
+$body = '{"permissions":["artifactregistry.repositories.uploadArtifacts","artifactregistry.repositories.downloadArtifacts"]}'
+curl.exe -x http://googleapis-dev.g -X POST -H "Authorization: Bearer $t" -H "Content-Type: application/json" -d $body https://artifactregistry.googleapis.com/v1/projects/*****/locations/europe-west2/repositories/docker-images:testIamPermissions
 
 Key Enterprise Security Considerations
 ConcernRecommendationMOK Certificate StorageStore the generated MOK cert/key in Secret Manager after Phase 1, for future driver updatesImage VersioningUse a naming convention with dates (v20250713) and maintain via a GCE Image Family for rolling updatesCMEKReplace GMEK with CMEK + Cloud KMS for regulated workloads (HIPAA, PCI-DSS, FedRAMP)Image Rebuild on Driver UpdateRe-run Phase 1 when NVIDIA releases a new driver version — set build_secure_image = true with a new secure_boot_image_nameOS Loginenable-oslogin = true metadata enforces IAM-based SSH — no static SSH keysNo Public IPno_public_ip = true is the enterprise default; access via IAP Tunnel or VPNIntegrity MonitoringAlerts on unexpected boot sequence changes via Cloud Monitoring / Security Command Center
