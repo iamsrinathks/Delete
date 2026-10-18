@@ -1,0 +1,30 @@
+project_id  = "tool01-svp01-pvt-prj"
+name_prefix = "tr1-pre-"
+
+node_pool_reservations = {
+  l4-inference = {
+    enabled           = true
+    zone              = "europe-west2-b"
+    instance_count    = 4
+    machine_type      = "g2-standard-24"
+    accelerator_type  = "nvidia-l4"
+    accelerator_count = 2
+    description       = "L4 capacity for GKE inference node pool"
+
+    share_type         = "SPECIFIC_PROJECTS"
+    shared_project_ids = ["caas01-svp01-pvt-prj"]
+    service_share_type = "ALLOW_ALL" # lets GKE/Vertex consume it
+  }
+
+  a100-training-burst = {
+    enabled           = true
+    zone              = "europe-west4-a"
+    instance_count    = 2
+    machine_type      = "a2-highgpu-1g"
+    accelerator_type  = "nvidia-tesla-a100"
+    accelerator_count = 1
+    local_ssds        = [{ disk_size_gb = 375 }]
+
+    delete_after_duration = { seconds = 604800 } # 7 days
+  }
+}
