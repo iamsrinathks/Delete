@@ -1,0 +1,38 @@
+project_id  = "tool01-svp01-pvt-prj"
+name_prefix = "tr1-pre-"
+
+# One entry per zone; `name` is identical across zones so a regional
+# GKE node pool can target it with a single SPECIFIC_RESERVATION value.
+node_pool_reservations = {
+  l4-inference-a = {
+    enabled = true, name = "l4-inference", zone = "europe-west2-a"
+    instance_count = 2, machine_type = "g2-standard-8"
+    accelerator_type = "nvidia-l4", accelerator_count = 1
+    description = "L4 for GKE inference pool, owner platform, CHG<id>"
+    share_type = "SPECIFIC_PROJECTS", shared_project_ids = ["caas01-svp01-pvt-prj"]
+    delete_after_duration = { seconds = 86400 } # pre/int only
+  }
+  l4-inference-b = {
+    enabled = true, name = "l4-inference", zone = "europe-west2-b"
+    instance_count = 2, machine_type = "g2-standard-8"
+    accelerator_type = "nvidia-l4", accelerator_count = 1
+    description = "L4 for GKE inference pool, owner platform, CHG<id>"
+    share_type = "SPECIFIC_PROJECTS", shared_project_ids = ["caas01-svp01-pvt-prj"]
+    delete_after_duration = { seconds = 86400 }
+  }
+  l4-inference-c = {
+    enabled = true, name = "l4-inference", zone = "europe-west2-c"
+    instance_count = 2, machine_type = "g2-standard-8"
+    accelerator_type = "nvidia-l4", accelerator_count = 1
+    description = "L4 for GKE inference pool, owner platform, CHG<id>"
+    share_type = "SPECIFIC_PROJECTS", shared_project_ids = ["caas01-svp01-pvt-prj"]
+    delete_after_duration = { seconds = 86400 }
+  }
+
+  # Custom N2, single zone only
+  n2c-32-64-a = {
+    enabled = true, name = "n2c-32-64", zone = "europe-west2-a"
+    instance_count = 1, machine_type = "n2-custom-32-65536"
+    delete_after_duration = { seconds = 86400 }
+  }
+}
