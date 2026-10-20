@@ -1,0 +1,36 @@
+Slide 1: Introduction – The Myth of AI Memory
+• Key Message: Start by debunking the common misconception that Large Language Models (LLMs) possess inherent memory.
+• Talking Points:
+    ◦ LLMs are technically stateless, meaning they do not remember previous interactions once a session ends.
+    ◦ Explain that if you ask a follow-up question, the model only appears to "remember" because of how the application handles the data behind the scenes.
+    ◦ Highlight that understanding these core concepts is essential for anyone looking to build enterprise-level applications.
+Slide 2: Simulating Memory through Conversation History
+• Key Message: Explain the "bundling" process that allows for coherent multi-turn conversations.
+• Talking Points:
+    ◦ When a user sends a follow-up prompt, the application bundles the entire conversation history (previous prompts and AI responses) into a single package.
+    ◦ This full package is sent to the LLM as a new, comprehensive input.
+    ◦ Because the model receives the context of what was discussed before, it can accurately respond to vague requests like "Explain point number 3".
+Slide 3: Tokens – The Currency of Gen AI
+• Key Message: Introduce tokens as the fundamental unit for measuring AI consumption and cost.
+• Talking Points:
+    ◦ AI consumption is not calculated by word count but by tokens; approximately 4 characters represent one token.
+    ◦ Input vs. Output: In long conversations, the input size grows significantly because the entire history is resent with every new turn.
+    ◦ Note the pricing difference: Input tokens are typically cheaper than output tokens because their volume is much higher in extended dialogues.
+Slide 4: The Tokenization Process
+• Key Message: Describe how models break down human language into machine-readable sequences.
+• Talking Points:
+    ◦ Tokenization is the process of splitting a sentence into character sequences based on patterns found in training data.
+    ◦ Different models (e.g., OpenAI vs. Gemini) will tokenize the same sentence differently, resulting in different token counts.
+    ◦ The goal of an efficient tokenizer is to minimize the total number of tokens used for a given piece of text.
+Slide 5: The Context Window and Its Limits
+• Key Message: Define the Context Window as the maximum information "storage" an AI has for a single prompt.
+• Talking Points:
+    ◦ Every model has a limit on how many tokens it can process at once; for example, some models can handle up to 400,000 (4 lakh) input tokens.
+    ◦ If a conversation or a document (like a 500-page book) exceeds this limit, the AI will begin to "forget" the earliest parts of the context.
+    ◦ Exceeding this window often results in the AI being unable to retrieve correct answers from large datasets.
+Slide 6: Context Compaction for Enterprise Apps
+• Key Message: Provide a solution for managing long conversations: Context Compaction.
+• Talking Points:
+    ◦ In large-scale applications, sending the entire raw history is inefficient and expensive.
+    ◦ Compaction involves extracting only the essential details—such as specific IDs or core issues—and discarding unnecessary conversational filler like greetings.
+    ◦ A best practice is to periodically compact the context (e.g., every 10 messages) to maintain the "memory" without hitting the token limit.
