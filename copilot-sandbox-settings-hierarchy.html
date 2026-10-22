@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Copilot Sandbox Settings Hierarchy</title>
+<style>
+:root{
+  --bg:#f6f7f9;--panel:#ffffff;--ink:#16191f;--muted:#5b6472;--line:#dde1e7;
+  --mdm:#7c3aed;--srv:#2563eb;--file:#0d9488;--user:#d97706;--client:#475569;
+  --ok:#15803d;--warn:#b45309;--bad:#b91c1c;--chip:#eef1f5;--code:#f1f3f6;
+}
+@media (prefers-color-scheme: dark){
+  :root{--bg:#0f1115;--panel:#171a21;--ink:#e7eaf0;--muted:#9aa3b2;--line:#2a2f3a;
+  --chip:#222733;--code:#1e222b;--warn:#f59e0b;--ok:#22c55e;--bad:#f87171}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1120px;margin:0 auto;padding:28px 16px 64px}
+h1{font-size:26px;margin:0 0 4px}
+h2{font-size:19px;margin:36px 0 10px}
+h3{font-size:16px;margin:18px 0 6px}
+p.lead{color:var(--muted);margin:0 0 18px;max-width:820px}
+code{background:var(--code);padding:1px 5px;border-radius:4px;font:13px ui-monospace,SFMono-Regular,Consolas,monospace}
+.small{font-size:13px;color:var(--muted)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 14px}
+.tab{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:7px 14px;border-radius:999px;cursor:pointer;font:inherit;font-size:14px}
+.tab[aria-selected="true"]{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.grid{display:grid;grid-template-columns:minmax(0,380px) minmax(0,1fr);gap:18px}
+@media (max-width:820px){.grid{grid-template-columns:1fr}}
+.stack{display:flex;flex-direction:column;gap:8px}
+.layer{position:relative;border:1px solid var(--line);border-left:6px solid var(--c);background:var(--panel);border-radius:10px;padding:10px 12px;cursor:pointer;text-align:left;font:inherit;color:inherit}
+.layer:hover{border-color:var(--c)}
+.layer[aria-pressed="true"]{box-shadow:0 0 0 2px var(--c) inset}
+.layer .rank{font-size:12px;color:var(--c);font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.layer .name{font-weight:650}
+.layer .sub{font-size:13px;color:var(--muted)}
+.sidech{margin-top:18px;border:2px dashed var(--line);border-radius:12px;padding:10px}
+.sidelabel{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
+.arrow{text-align:center;font-size:12px;color:var(--muted)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.panel h3:first-child{margin-top:0}
+.kv{display:grid;grid-template-columns:140px 1fr;gap:4px 12px;font-size:14px;margin:8px 0}
+.kv div:nth-child(odd){color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:13.5px;background:var(--panel)}
+th,td{border-bottom:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);background:var(--chip)}
+.tblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px}
+.y{color:var(--ok);font-weight:600}.n{color:var(--muted)}.w{color:var(--warn);font-weight:600}
+.pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;background:var(--chip);margin:1px 2px 1px 0}
+.note{border-left:4px solid var(--warn);background:var(--panel);padding:10px 14px;border-radius:8px;margin:12px 0;font-size:14px}
+.note.bad{border-color:var(--bad)}
+.rules{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}
+.rule{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+.rule b{display:block;margin-bottom:4px}
+.sim{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:10px}
+.sim label{display:block;font-size:13px;color:var(--muted);margin-bottom:3px}
+select,input[type=text]{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);font:inherit;font-size:14px}
+.result{margin-top:12px;padding:12px;border-radius:8px;background:var(--chip);font-size:14px}
+footer{margin-top:40px;font-size:13px;color:var(--muted)}
+a{color:var(--srv)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Copilot local sandbox: settings hierarchy</h1>
+<p class="lead">Who controls the sandbox, in which file, for <b>Copilot CLI</b>, the <b>GitHub Copilot app</b> and <b>VS Code</b>. Pick a client, then click a layer. Researched from GitHub and VS Code docs as of 22 Oct 2026.</p>
+
+<div class="tabs" role="tablist" id="clientTabs">
+  <button class="tab" role="tab" data-client="cli" aria-selected="true">Copilot CLI</button>
+  <button class="tab" role="tab" data-client="app" aria-selected="false">Copilot app</button>
+  <button class="tab" role="tab" data-client="vscode" aria-selected="false">VS Code</button>
+</div>
+
+<div class="grid">
+  <div class="stack" id="stack"></div>
+  <div class="panel" id="detail"></div>
+</div>
+
+<h2>How the layers combine</h2>
+<p class="small">For most managed keys the highest source wins (MDM &gt; server &gt; file &gt; user). <b>The <code>sandbox</code> key is the exception:</b> all managed sources and the user's settings combine in the most restrictive direction.</p>
+<div class="rules">
+  <div class="rule"><b>Force-on keys</b><code>enabled</code> <code>sandboxMcpServers</code> <code>sandboxLspServers</code> <code>failIfUnavailable</code><br>Managed <code>true</code> enforces. Managed <code>false</code> or omitted leaves the user value alone.</div>
+  <div class="rule"><b>Capability keys</b><code>allowBypass</code> <code>auth.git/gh</code> <code>allowDevToolAccess</code> <code>addCurrentWorkingDirectory</code> network allows<br>Managed <code>false</code> prohibits. Managed <code>true</code> does not grant.</div>
+  <div class="rule"><b>Path grants</b><code>readwritePaths</code> <code>readonlyPaths</code><br>Intersected by <b>exact string</b>. An empty managed array removes all user grants (CWD and temp stay).</div>
+  <div class="rule"><b>Denied paths</b><code>deniedPaths</code><br>Managed list is <b>added</b> to the user's list.</div>
+  <div class="rule"><b>Hosts</b><code>allowedHosts</code> intersected (no overlap = all hosts denied). <code>blockedHosts</code> unioned; block beats allow.</div>
+  <div class="rule"><b>learningMode</b><code>"allow"</code> accepted only from native Windows MDM (Intune/registry); ignored in files. Any managed <code>"deny"</code> wins.</div>
+</div>
+
+<h2>Try it: one key across layers</h2>
+<p class="small">Choose what each layer sets for a key and see the effective result.</p>
+<div class="panel">
+  <div class="sim">
+    <div><label for="simKey">Key</label>
+      <select id="simKey">
+        <option value="enabled">enabled (force-on)</option>
+        <option value="allowBypass">allowBypass (capability)</option>
+        <option value="allowedHosts">allowedHosts (list, intersect)</option>
+        <option value="deniedPaths">deniedPaths (list, add)</option>
+      </select></div>
+    <div><label for="simMdm">MDM (Intune)</label><input type="text" id="simMdm"></div>
+    <div><label for="simSrv">Server-managed</label><input type="text" id="simSrv"></div>
+    <div><label for="simFile">managed-settings.json</label><input type="text" id="simFile"></div>
+    <div><label for="simUser">User settings</label><input type="text" id="simUser"></div>
+  </div>
+  <p class="small" id="simHint"></p>
+  <div class="result" id="simOut"></div>
+</div>
+
+<h2>Which layer can set what</h2>
+<div class="tblwrap"><table id="matrix"></table></div>
+<p class="small">"Locks" = the managed value restricts users. "User" columns show where an individual can set the value for that client.</p>
+
+<h2>Client-specific gotchas</h2>
+<div class="note"><b>VS Code — docs conflict.</b> GitHub's reference lists <code>sandbox</code> for VS Code Agent Host (1.138+, minimum 1.141.0). VS Code's enterprise guide says that reference does not list it, and managed sandbox enforcement is in Preview. Verify with <code>/sandbox policy</code> and <b>Developer: Policy Diagnostics</b> on a canary.</div>
+<div class="note"><b>VS Code — bypass default differs.</b> When managed <code>enabled: true</code> is set and <code>allowBypass</code> is omitted, VS Code locks the session toggle on. The CLI treats omitted as allowed.</div>
+<div class="note"><b>VS Code — harness side-effects.</b> Any managed settings disable the Claude and Codex harnesses. Managed <code>sandbox.enabled: true</code> routes new sessions to the Copilot harness unless <code>vscode.temporaryDefaultToLocalHarness: true</code> (1.142+). The Local harness ignores runtime sandbox rules and is unsandboxed on Windows.</div>
+<div class="note"><b>Copilot app.</b> Project settings show only what the user asked for, not the effective managed policy, and show no per-setting locks. The embedded runtime still enforces the full managed <code>sandbox</code> object.</div>
+<div class="note bad"><b>Windows network rules are guardrails.</b> Host rules and proxies rely on programs honouring proxy settings, and need <code>allowLocalNetwork: true</code>. Keep corporate egress controls in place.</div>
+
+<footer>
+Sources:
+<a href="https://docs.github.com/en/copilot/reference/enterprise-administrators/enterprise-managed-settings">GitHub enterprise managed settings</a> ·
+<a href="https://docs.github.com/en/copilot/how-tos/cloud-and-local-sandboxes/configuring-local-sandbox-settings">Configuring local sandbox settings</a> ·
+<a href="https://code.visualstudio.com/docs/agents/run/agent-sandboxing">VS Code agent sandboxing</a> ·
+<a href="https://code.visualstudio.com/docs/enterprise/manage-ai-settings">VS Code: manage AI settings</a>
+</footer>
+</div>
+
+<script>
+const C = {mdm:'var(--mdm)',srv:'var(--srv)',file:'var(--file)',user:'var(--user)',client:'var(--client)'};
+
+const shared = {
+  mdm:{rank:'1 · highest',name:'MDM-managed settings',sub:'Intune / Windows registry, macOS managed preferences',color:C.mdm,
+    who:'Endpoint / Intune team',
+    where:'Delivered by device management in the Copilot managed-settings format (not the VS Code policy namespace).',
+    scope:'Device. Applies before sign-in; good for the hard floor.',
+    keys:['enabled','failIfUnavailable','allowBypass','sandboxMcpServers / sandboxLspServers','addCurrentWorkingDirectory','auth.git / auth.gh','allowDevToolAccess','learningMode (only source where "allow" is accepted)','userPolicy.filesystem.*','userPolicy.network.* incl. proxy.url','userPolicy.seatbelt.keychainAccess (macOS)','forceRemoteSettingsRefresh (registry: store as string "true")'],
+    tip:'Ring 0–1: learningMode "allow" for canaries only. Floor for everyone: enabled, deniedPaths for secrets, blockedHosts, proxy.url.'},
+  srv:{rank:'2',name:'Server-managed settings',sub:'GitHub enterprise: copilot/managed-settings.json + team mappings',color:C.srv,
+    who:'GitHub enterprise admins',
+    where:'Enterprise config: copilot/managed-settings.json, copilot/team-mappings.json, copilot/teams/*. Fetched by clients after sign-in, cached about one hour.',
+    scope:'Signed-in account; per-team overrides via team membership.',
+    keys:['Same sandbox schema as MDM (except learningMode "allow")','Team override: wrap the whole object as { "sandbox": { "overridable": { … } } } — the wrapper must be the only key; a team file replaces the whole default','forceRemoteSettingsRefresh: true to skip the cache and block on fetch failure'],
+    tip:'Put team-specific allowlists and allowDevToolAccess here. On an unsupported host, server-managed enabled:true can be declined unless failIfUnavailable:true.'},
+  file:{rank:'3',name:'File-based managed-settings.json',sub:'Admin-placed file on the device',color:C.file,
+    who:'Platform / packaging team',
+    where:'A managed-settings.json placed on the machine at the path given in GitHub\'s deploy guide (check the docs for the exact OS path).',
+    scope:'Device. Useful where MDM can\'t express JSON easily.',
+    keys:['Same sandbox schema','learningMode "allow" is ignored here','Enforces enabled:true like MDM (commands fail rather than run unsandboxed)'],
+    tip:'Good for build agents and VDI images.'}
+};
+
+const clients = {
+  cli:{label:'Copilot CLI',layers:[shared.mdm,shared.srv,shared.file,
+    {rank:'4',name:'User settings.json',sub:'%USERPROFILE%\\.copilot\\settings.json (or $COPILOT_HOME)',color:C.user,
+     who:'Developer',
+     where:'Nested under the "sandbox" key. Edited directly or with /sandbox (General, Credentials, Filesystem, Network tabs). Repo-level settings files cannot set sandbox keys.',
+     scope:'That user, CLI only. Not shared with the Copilot app.',
+     keys:['enabled (also /sandbox enable|disable)','allowBypass, sandboxMcpServers, sandboxLspServers','addCurrentWorkingDirectory, allowDevToolAccess','auth.git, auth.gh, credentials.envVars{NAME:{injectHosts}}','userPolicy.filesystem.readwritePaths / readonlyPaths / deniedPaths','userPolicy.network.allowOutbound / allowLocalNetwork / allowedHosts / blockedHosts / proxy','userPolicy.seatbelt.keychainAccess (macOS, file only)'],
+     tip:'Managed values show as "(managed)" in /sandbox. Check the effective result with /sandbox policy.'},
+    {rank:'Runtime',name:'Session overrides',sub:'/sandbox disable, bypass prompts, --no-sandbox',color:C.client,
+     who:'Developer, per session',
+     where:'Interactive only; never saved to policy.',
+     scope:'Current session.',
+     keys:['--no-sandbox: blocked when managed enabled:true','/sandbox disable: session-only if managed allows bypass; blocked if allowBypass:false','Bypass prompt: per command, or rest of session; Windows tries "sandbox relaxed" first'],
+     tip:'Known issue: copilot --acp has been reported to skip the sandbox (github/copilot-cli #5089).'}]},
+  app:{label:'Copilot app',layers:[shared.mdm,shared.srv,shared.file,
+    {rank:'4',name:'Project sandbox settings',sub:'App → Settings → Projects → Sandbox',color:C.user,
+     who:'Developer',
+     where:'Per project in the app UI, saved automatically. Separate from the CLI\'s settings.json.',
+     scope:'New local / working-tree sessions in that project. Not cloud or remote-host sessions.',
+     keys:['Sandbox new sessions (off by default unless managed)','Additional read/write, Additional read-only, Denied folders','Outbound internet (on by default)','Local network (on by default in the app; off in CLI)','Git credentials, GitHub CLI credentials'],
+     tip:'The app shows the requested policy, not the effective managed one, and no per-setting locks. Changes apply to new sessions or after /restart-session.'},
+    {rank:'Runtime',name:'Session overrides',sub:'/sandbox off, bypass prompts',color:C.client,
+     who:'Developer, per session',where:'Interactive only.',scope:'Current session.',
+     keys:['/sandbox off and the project toggle cannot override managed enabled:true','Bypass prompt allowed only if effective allowBypass permits','"Sandbox unavailable" → fix the reported issue, then Retry sandbox'],
+     tip:'The embedded runtime parses and enforces the complete managed sandbox object, including keys the app UI does not show.'}]},
+  vscode:{label:'VS Code',side:
+    {rank:'Separate channel',name:'VS Code device policies',sub:'Group Policy / Intune ADMX, macOS profiles — not part of the stack',color:C.client,
+     who:'Endpoint / Intune team',
+     where:'VS Code policy namespace. If a Copilot managed setting covers the same control, the managed setting wins (no merge).',
+     scope:'Managed VS Code installs.',
+     keys:['ChatAgentSandboxEnabled, ChatAgentSandboxAllowNetwork, ChatAgentSandboxAllowUnsandboxedCommands — deprecated, Local harness only','ChatAgentNetworkFilter + ChatAgentAllowedNetworkDomains / ChatAgentDeniedNetworkDomains — fetch tool and Integrated Browser','ChatToolsAutoApprove, ChatToolsTerminalEnableAutoApprove — approvals, not sandbox'],
+     tip:'Do not build the sandbox floor on the deprecated ChatAgentSandbox* policies; they do not enforce Copilot harness sessions. This channel does not merge with the managed-settings stack: where both set the same control, the Copilot managed setting wins outright.'},
+    layers:[shared.mdm,shared.srv,shared.file,
+    {rank:'4',name:'User / Workspace settings.json',sub:'chat.agent.sandbox.* (on the execution host)',color:C.user,
+     who:'Developer',
+     where:'VS Code settings on the machine where commands run — for Remote-WSL that is the WSL side.',
+     scope:'Copilot harness (Agent Host) sessions with default tools only.',
+     keys:['enabled ("on" / "off")','allowUnsandboxedCommands (= CLI allowBypass)','mcpServers, lspServers','credentials.authenticategit, credentials.authenticategh','fileSystem.allowDevToolAccess','fileSystem.userConfiguredPaths {readwritePaths, readonlyPaths, deniedPaths}','network.allowNetwork, allowLocalNetwork, allowedDomains, deniedDomains','Deprecated/ignored: allowNetwork, retryWithAllowNetworkRequests, fileSystem.mac|linux|windows'],
+     tip:'No user keys for credentials.envVars, proxy, addCurrentWorkingDirectory or learningMode. Check with /sandbox policy and Developer: Policy Diagnostics.'},
+    {rank:'Runtime',name:'Session toggle',sub:'Permissions → Sandboxing for terminal',color:C.client,
+     who:'Developer, per session',where:'Not saved to settings.',scope:'Current session.',
+     keys:['With managed enabled:true, toggle is editable only if allowBypass is explicitly true','"Allow Outside Sandbox" prompt: one operation or whole session','Sandboxing still applies under the "Allow all" permission level'],
+     tip:'Managed sandbox.enabled:true routes new sessions to the Copilot harness; any managed settings disable Claude/Codex harnesses.'}]}
+};
+
+let current='cli', sel=0;
+const stack=document.getElementById('stack'), detail=document.getElementById('detail');
+function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+function render(){
+  const cl=clients[current], L=cl.layers;
+  stack.innerHTML='';
+  const mk=(l,i,extra)=>{const b=document.createElement('button');b.className='layer'+(extra||'');b.style.setProperty('--c',l.color);
+    b.setAttribute('aria-pressed',i===sel);b.innerHTML=`<div class="rank">${esc(l.rank)}</div><div class="name">${esc(l.name)}</div><div class="sub">${esc(l.sub)}</div>`;
+    b.onclick=()=>{sel=i;render()};return b};
+  L.forEach((l,i)=>{
+    if(i>0){const a=document.createElement('div');a.className='arrow';a.textContent='▼ then';stack.appendChild(a)}
+    stack.appendChild(mk(l,i));
+  });
+  if(cl.side){
+    const s=document.createElement('div');s.className='sidech';
+    s.innerHTML='<div class="sidelabel">Separate policy channel — does not combine with the stack above</div>';
+    s.appendChild(mk(cl.side,'side'));stack.appendChild(s);
+  }
+  const l=sel==='side'?cl.side:L[sel];
+  detail.innerHTML=`<h3 style="color:${l.color}">${esc(l.name)}</h3>
+  <div class="kv"><div>Owned by</div><div>${esc(l.who)}</div><div>Where</div><div>${esc(l.where)}</div><div>Scope</div><div>${esc(l.scope)}</div></div>
+  <h3>Settings managed here</h3><ul>${l.keys.map(k=>`<li>${esc(k)}</li>`).join('')}</ul>
+  <div class="note" style="margin-bottom:0"><b>Rollout tip:</b> ${esc(l.tip)}</div>`;
+}
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+  current=t.dataset.client;sel=0;
+  document.querySelectorAll('.tab').forEach(x=>x.setAttribute('aria-selected',x===t));render()});
+render();
+
+// matrix
+const rows=[
+ ['enabled','force-on','Locks','Locks','Locks','enabled','Sandbox new sessions','chat.agent.sandbox.enabled'],
+ ['failIfUnavailable','force-on','Locks','Locks','Locks','—','—','—'],
+ ['allowBypass','capability','Locks','Locks','Locks','allowBypass','—','allowUnsandboxedCommands'],
+ ['sandboxMcpServers / LspServers','force-on','Locks','Locks','Locks','yes','—','mcpServers / lspServers'],
+ ['addCurrentWorkingDirectory','capability','Locks','Locks','Locks','yes','—','— (always on)'],
+ ['auth.git / auth.gh','capability','Locks','Locks','Locks','yes','Credentials toggles','credentials.authenticategit / gh'],
+ ['credentials.envVars','user only','—','—','—','yes','—','—'],
+ ['allowDevToolAccess','capability','Locks','Locks','Locks','yes','—','fileSystem.allowDevToolAccess'],
+ ['learningMode','Windows','"allow"/"deny"','"deny" only','"deny" only','—','—','—'],
+ ['readwritePaths / readonlyPaths','intersect','Locks','Locks','Locks','yes','Additional folders','userConfiguredPaths'],
+ ['deniedPaths','add','Adds','Adds','Adds','yes','Denied folders','userConfiguredPaths.deniedPaths'],
+ ['allowOutbound / allowLocalNetwork','capability','Locks','Locks','Locks','yes','Outbound / Local network','network.allowNetwork / allowLocalNetwork'],
+ ['allowedHosts','intersect','Locks','Locks','Locks','yes','—','network.allowedDomains'],
+ ['blockedHosts','union','Adds','Adds','Adds','yes','—','network.deniedDomains'],
+ ['proxy.url','managed URL wins','Locks','Locks','Locks','yes (+ creds)','—','—'],
+ ['seatbelt.keychainAccess','macOS','Locks','Locks','Locks','file only','—','—']
+];
+const m=document.getElementById('matrix');
+m.innerHTML='<thead><tr><th>Key (managed name)</th><th>Merge</th><th>MDM</th><th>Server</th><th>File</th><th>CLI user</th><th>App project</th><th>VS Code user key</th></tr></thead><tbody>'+
+ rows.map(r=>'<tr>'+r.map((c,i)=>{const cls=c==='—'?'n':(i>=2&&i<=4?'y':'');return `<td class="${cls}">${i===0||i===7?'<code>'+esc(c)+'</code>':esc(c)}</td>`}).join('')+'</tr>').join('')+'</tbody>';
+
+// simulator
+const presets={
+ enabled:{mdm:'',srv:'true',file:'',user:'false',hint:'Use true / false / blank. Any managed true forces it on.'},
+ allowBypass:{mdm:'false',srv:'',file:'',user:'true',hint:'Use true / false / blank (blank = default true). Any managed false prohibits.'},
+ allowedHosts:{mdm:'',srv:'*.example.com, github.com, registry.npmjs.org',file:'',user:'api.example.com, github.com, pypi.org',hint:'Comma-separated hosts; blank = layer sets nothing. Non-empty lists intersect.'},
+ deniedPaths:{mdm:'C:\\Users\\u\\.ssh',srv:'',file:'',user:'C:\\Users\\u\\.aws',hint:'Comma-separated paths; all lists are added together.'}
+};
+const ids=['mdm','srv','file','user'];
+function load(){const p=presets[simKey.value];ids.forEach(i=>document.getElementById('sim'+i[0].toUpperCase()+i.slice(1)).value=p[i]);simHint.textContent=p.hint;calc()}
+function val(i){return document.getElementById('sim'+i[0].toUpperCase()+i.slice(1)).value.trim()}
+// does allowlist entry e permit everything that pattern c permits?
+function covers(e,c){
+  if(e==='*'||e===c)return true;
+  if(c==='*')return false;
+  if(e.startsWith('*.')){const suf=e.slice(1);return c.endsWith(suf)&&c.length>suf.length;}
+  return false;
+}
+// wildcard-aware intersection: keep each candidate pattern that every list covers, then drop ones subsumed by another kept pattern
+function intersectHosts(lists){
+  const norm=lists.map(l=>l.map(h=>h.toLowerCase()));
+  const cands=[...new Set(norm.flat())];
+  const kept=cands.filter(c=>norm.every(l=>l.some(e=>covers(e,c))));
+  return kept.filter(c=>!kept.some(o=>o!==c&&covers(o,c)));
+}
+function list(s){return s?s.split(',').map(x=>x.trim()).filter(Boolean):null}
+function calc(){
+  const k=simKey.value;let out='';
+  const managed=['mdm','srv','file'].map(val);const u=val('user');
+  if(k==='enabled'){
+    const forced=managed.includes('true');
+    out=forced?'<b class="y">Sandbox ON — locked.</b> A managed source sets true; the user\'s value and --no-sandbox are ignored.':
+      `<b>${u==='true'?'ON':'OFF'}</b> — no managed force, so the user value (${u||'default off'}) applies.`;
+  } else if(k==='allowBypass'){
+    const prohibited=managed.includes('false');
+    out=prohibited?'<b class="y">Bypass PROHIBITED.</b> A managed false wins; no per-command escape, no /sandbox disable.':
+      `<b>${u==='false'?'Bypass off':'Bypass allowed'}</b> — managed true or blank never grants; the user value (${u||'default true'}) applies. <span class="w">VS Code exception: with managed enabled:true and allowBypass omitted, the toggle locks on.</span>`;
+  } else if(k==='allowedHosts'){
+    const lists=[...managed,u].map(list).filter(Boolean);
+    if(!lists.length){out='<b>No allowlist</b> — all hosts allowed unless blocked.'}
+    else{const r=intersectHosts(lists);
+      out=r.length?`<b>Effective allowlist:</b> ${r.map(h=>'<span class="pill">'+esc(h)+'</span>').join('')}<br><span class="small">An entry survives only if every layer that sets a list allows it. <code>*.x</code> matches subdomains of x, not x itself; <code>*</code> matches all.</span>`:'<b style="color:var(--bad)">No overlap — every host is denied.</b>';}
+  } else {
+    const all=[...managed,u].map(list).filter(Boolean).flat();
+    out=all.length?'<b>Effective denied paths:</b> '+[...new Set(all)].map(p=>'<span class="pill">'+esc(p)+'</span>').join(''):'<b>No denied paths.</b>';
+  }
+  simOut.innerHTML=out;
+}
+simKey.onchange=load;ids.forEach(i=>document.getElementById('sim'+i[0].toUpperCase()+i.slice(1)).oninput=calc);load();
+</script>
+</body>
+</html>
