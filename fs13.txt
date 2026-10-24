@@ -64,3 +64,38 @@ Get-Command npm, node, dotnet -ErrorAction SilentlyContinue | Select-Object Name
    Expect a match (the package was restored from NuGet).
 
 Send the result of step 1 or the `Get-Command` output, and I'll tell you which route to take.
+
+
+
+
+
+-----------------------
+
+
+npm is installed: `C:\src\nodejs\npm.cmd` is **v11.19.0**, and `nvm use 24.21.0` has now activated Node. It just isn't on PATH in the windows that were already open, and Copilot's shell copies the PATH of the window it started from.
+
+**Fix: open fresh windows so they pick up the new PATH**
+1. Close the current **test window** and **Session ON**.
+2. Open a **new, normal (non-admin)** PowerShell and check:
+   ```powershell
+   npm --version; node --version
+   ```
+   - **Versions shown** → go to step 3.
+   - **Still not found** → add it for this window only: `$env:Path += ';C:\src\nodejs'`, then check again.
+3. In that same window: `cd C:\SbxTest\repo`, then `copilot`.
+4. **SHELL prompt:** `Get-Command npm, node | Select-Object Name, Source`. Both should now show `C:\src\nodejs`.
+
+**Then run FS-13**
+1. Type `/sandbox policy npm install`. Screenshot the **Dev tools** section, which also covers **FS-15**.
+2. **SHELL prompt:**
+   ```text
+   npm init -y; npm install left-pad --no-audit --no-fund
+   ```
+3. **Test window:** `Test-Path C:\SbxTest\repo\node_modules\left-pad` → expect **True**
+
+**If PATH still won't cooperate:** use the full path in the SHELL prompt instead:
+```text
+& C:\src\nodejs\npm.cmd init -y; & C:\src\nodejs\npm.cmd install left-pad --no-audit --no-fund
+```
+
+**Worth noting for the rollout FAQ:** Copilot's sandboxed shell **inherits PATH from the window it was started in**. Developers who use **nvm** need an active Node version (`nvm use`) **before** starting Copilot, or npm won't be found inside the sandbox.
