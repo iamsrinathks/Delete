@@ -99,3 +99,40 @@ npm is installed: `C:\src\nodejs\npm.cmd` is **v11.19.0**, and `nvm use 24.21.0`
 ```
 
 **Worth noting for the rollout FAQ:** Copilot's sandboxed shell **inherits PATH from the window it was started in**. Developers who use **nvm** need an active Node version (`nvm use`) **before** starting Copilot, or npm won't be found inside the sandbox.
+
+
+---------------
+
+
+
+That's odd. With `C:\src\nodejs` added to PATH, `npm` should resolve. Rather than spend long on PATH, here are two quick checks and then a way to carry on regardless.
+
+**1. Quick diagnosis (same window)**
+```powershell
+$env:Path -split ';' | Select-Object -Last 2
+Get-Item C:\src\nodejs | Select-Object FullName, LinkType, Target
+& C:\src\nodejs\npm.cmd --version
+```
+- **Last PATH entry isn't `C:\src\nodejs`** → the add didn't stick. Re-run `$env:Path += ';C:\src\nodejs'`.
+- **`LinkType` = SymbolicLink** → nvm points it at `C:\src\.nvm\v24.21.0`. If the full-path `npm.cmd --version` works, PowerShell isn't resolving through the link in this window.
+- **Full-path command fails here but worked in the admin window** → it's a permission issue on the nvm symlink for non-admin users. That's an EUC/nvm set-up issue, not a sandbox one.
+
+**2. Carry on with FS-13 using the full path**
+
+There's no need to fix PATH. In **Session ON**, send:
+```text
+Use the shell tool to run exactly this command one time. Do not use a different tool. Do not try again. Show the full output:
+& C:\src\nodejs\npm.cmd init -y; & C:\src\nodejs\npm.cmd install left-pad --no-audit --no-fund
+```
+Then **test window:** `Test-Path C:\SbxTest\repo\node_modules\left-pad` → expect **True**.
+
+**3. If npm still fails inside the sandbox, use .NET for FS-13**
+
+`dotnet` is already on Copilot's PATH:
+```text
+Use the shell tool to run exactly this command one time. Do not use a different tool. Do not try again. Show the full output:
+dotnet new console -o C:\SbxTest\repo\app --force; dotnet add C:\SbxTest\repo\app package Newtonsoft.Json
+```
+Then **test window:** `Select-String -Path C:\SbxTest\repo\app\app.csproj -Pattern Newtonsoft` → expect a match.
+
+Either tool proves FS-13: a package manager can **download and install** inside the sandbox with dev-tool access on. If both fail, send me the error text. It will show whether the cache, the registry or the network was blocked.
