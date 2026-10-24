@@ -1,0 +1,15 @@
+**Next: FS-08 (denied child folder inside a granted parent)**
+
+1. **Edit `settings.json`**, lines 15 and 17:
+   ```json
+   "readwritePaths": ["C:\\SbxTest"],
+   "readonlyPaths": [],
+   "deniedPaths": ["C:\\SbxTest\\secrets"]
+   ```
+2. **Session ON:** `/exit` → `copilot` → `/sandbox policy`. Screenshot: `C:\SbxTest` under read-write and `C:\SbxTest\secrets` under denied.
+3. **SHELL prompt:**
+   ```text
+   Get-Content C:\SbxTest\readonly\ref.txt; Get-Content C:\SbxTest\secrets\fake-token.txt
+   ```
+4. **Expect:** `reference data` **shows** (the parent grant works), and the secrets read is **"Access is denied"** (the more specific deny wins). `FAKE-TOKEN-NOT-REAL` must **not** appear.
+5. **Reset:** set both lists back to `[]`, save, `/exit`, `copilot`.
