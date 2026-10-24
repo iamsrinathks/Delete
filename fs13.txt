@@ -136,3 +136,35 @@ dotnet new console -o C:\SbxTest\repo\app --force; dotnet add C:\SbxTest\repo\ap
 Then **test window:** `Select-String -Path C:\SbxTest\repo\app\app.csproj -Pattern Newtonsoft` → expect a match.
 
 Either tool proves FS-13: a package manager can **download and install** inside the sandbox with dev-tool access on. If both fail, send me the error text. It will show whether the cache, the registry or the network was blocked.
+
+
+
+
+
+
+-------------------
+
+
+That explains it. **`C:\src\nodejs` doesn't exist as your normal user.** It only appeared in the **admin** window, where `nvm use` created it.
+
+**Likely cause:** nvm-windows creates `C:\src\nodejs` as a **symlink**, which needs admin rights. If your admin window runs under a **separate elevation account** (common with privilege-management tools), the link may not be visible or followable from your standard account. Either way, it's an **nvm or workstation set-up issue, not a sandbox issue**, so I'd raise it with EUC rather than spend test time on it.
+
+**Recommendation: use .NET for FS-13 now.** `dotnet` is on Copilot's PATH and was found inside the sandbox.
+
+1. **Session ON**, SHELL prompt:
+   ```text
+   Use the shell tool to run exactly this command one time. Do not use a different tool. Do not try again. Show the full output:
+   dotnet new console -o C:\SbxTest\repo\app --force; dotnet add C:\SbxTest\repo\app package Newtonsoft.Json
+   ```
+2. **Test window:**
+   ```powershell
+   Select-String -Path C:\SbxTest\repo\app\app.csproj -Pattern Newtonsoft
+   ```
+   Expect a line containing `Newtonsoft.Json` (the package was downloaded and added).
+3. **Also run** `/sandbox policy dotnet restore` in Session ON and screenshot the **Dev tools** section. That covers **FS-15**.
+
+**What to record**
+- **FS-13** = .NET instead of npm (note: "npm unavailable to standard user; nvm symlink only present in elevated context").
+- **FAQ / EUC item:** developers using **nvm-windows** need Node visible to their **standard** account, or npm won't work in Copilot's sandbox either.
+
+If the `dotnet` command fails, send the error. A NuGet download failure would point at the network or proxy, and a cache failure at dev-tool paths.
