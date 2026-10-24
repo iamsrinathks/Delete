@@ -1,0 +1,31 @@
+The machine is now **patched**: build **26100.9711**, above the **26100.9550** minimum. That's why the shell works properly now. Updating the doc.
+
+**FS-02 now passes**, and the Windows update explains everything ([doc](https://claude.ai/artifact/Mpw9TTLpyKkituw6i4wYUU) updated).
+
+**What happened**
+- Your restart installed the update. The build is now **24H2 26100.9711**, above the **26100.9550** minimum.
+- Sandboxed **git** now works: commit `878244f fs02-retest`, with no "does not fully support" warning.
+- This is direct proof of the **Intune build gate**: the same command fails below the minimum and works above it.
+
+**What I changed in the doc**
+- **FS-02:** ⏸ → ✅ **Pass (after OS update)**, with the retest screenshot.
+- **Evidence header:** records that **FS-01 to FS-17** ran on the old build, and **FS-18 onward** on 26100.9711, with a build screenshot.
+
+**Do the old-build results still count?** Yes. Those blocks were real policy denials ("Access is denied"), not build errors. The one worth repeating on the new build is **FS-17 (`/add-dir`)**, because it's a finding you'll raise with GitHub. Two minutes: `/add-dir C:\SbxTest\other` → write `fs17b.txt` → `Test-Path`.
+
+**Running score:** FS-01 ✅ · FS-02 ✅ · FS-03 ✅ · FS-04 ✅ · FS-05 ✅ · FS-06 ✅ · FS-07 ✅ · FS-08 ✅ · FS-09 ✅ · FS-10 ✅ · FS-11 ✅ · FS-16 ✅ · FS-17 ❌ (docs) · FS-18 ✅ · FS-19 ✅
+
+---
+
+**Next: FS-12 (start folder not granted)**. Git works now, so this test is valid.
+
+1. **Edit `settings.json`**, line 12:
+   ```json
+   "addCurrentWorkingDirectory": false,
+   ```
+2. `/exit` → `copilot` → `/sandbox policy`. Confirm the **"Working directory"** section is gone or empty.
+3. **SHELL prompt:** `git -C C:\SbxTest\repo status`
+4. **Expect:** git **fails** with permission denied or "not a git repository", because neither the repo nor its `.git` folder is granted.
+5. **Reset immediately:** `"addCurrentWorkingDirectory": true`, save, `/exit` → `copilot`
+
+> **CAUTION:** Don't forget step 5. With it left `false`, every later test fails.
