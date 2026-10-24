@@ -168,3 +168,41 @@ That explains it. **`C:\src\nodejs` doesn't exist as your normal user.** It only
 - **FAQ / EUC item:** developers using **nvm-windows** need Node visible to their **standard** account, or npm won't work in Copilot's sandbox either.
 
 If the `dotnet` command fails, send the error. A NuGet download failure would point at the network or proxy, and a cache failure at dev-tool paths.
+
+
+
+
+
+---------------------
+
+
+That's not the sandbox. This laptop has only the **.NET runtime**, no **SDK**: *"No .NET SDKs were found"*. So `dotnet new` and `dotnet add` can't work anywhere on this machine. Confirm in the test window:
+```powershell
+dotnet --list-sdks
+```
+Empty output means no SDK.
+
+**Where that leaves FS-13 / FS-14**
+- npm only exists in your elevated context (the nvm issue), and .NET has no SDK. There's **no package manager available to your standard user** on this device.
+- **Record FS-13 and FS-14 as "Not testable — device setup"** with that note. They aren't sandbox failures.
+
+**One last quick option: PowerShell's own package manager (PSGallery)**
+
+Worth one try, since it's built in. **Session ON**, SHELL prompt:
+```text
+Use the shell tool to run exactly this command one time. Do not use a different tool. Do not try again. Show the full output:
+Save-Module -Name PSScriptAnalyzer -Path C:\SbxTest\repo\modules -Repository PSGallery -Force
+```
+Then **test window:** `Test-Path C:\SbxTest\repo\modules\PSScriptAnalyzer` → **True** = FS-13 passes (package downloaded and written inside the sandbox).
+
+- If it errors about a **NuGet provider** or **PSGallery not found**, stop and keep "Not testable — device setup". Corporate devices often block PSGallery.
+
+**FS-15 can still be done now.** It doesn't need a package manager:
+```text
+/sandbox policy git status
+```
+Screenshot the **Dev tools** section. It should show the tools that git brings in (e.g. `C:\Program Files\Git\cmd`).
+
+**For the rollout:** pick **one standard package workflow** (e.g. npm via Artifactory) and make sure the **Ring 0 test device** has it working for the standard user **before** sandbox testing. Otherwise FS-13/14 can't be proven.
+
+Send the `Save-Module` and `/sandbox policy git status` results, and I'll record FS-13, FS-14 and FS-15 together.
