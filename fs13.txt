@@ -1,0 +1,29 @@
+FS-12 is a **Pass**. Recording it now.
+
+FS-12 is a **Pass** ([doc](https://claude.ai/artifact/Mpw9TTLpyKkituw6i4wYUU), 7.16).
+- **Policy:** with `addCurrentWorkingDirectory: false`, the **Working directory** section disappeared from `/sandbox policy`.
+- **Result:** git failed with *"cannot change to 'C:\SbxTest\repo': Permission denied"* (exit 128).
+- **Bonus:** the CLI's error tells the model **"Do not attempt workarounds"**, a useful guardrail against the agent trying to get around the sandbox.
+- **Also noticed:** on the patched build the network section no longer shows the "loopback stays blocked" warning, so localhost tests should now behave per the docs.
+
+> **⚠️ Reset now:** `"addCurrentWorkingDirectory": true`, save, then `/exit` → `copilot`.
+
+---
+
+**Next: FS-13 (package install with dev-tool access on)**
+
+Your policy shows `c:\src\nodejs` and `c:\src\npm-global`, so npm should be available.
+
+1. **Check** that `settings.json` has `"allowDevToolAccess": true` and `"addCurrentWorkingDirectory": true`.
+2. **Test window:** confirm npm works:
+   ```powershell
+   npm --version
+   ```
+3. **Session ON:** `/sandbox policy npm install` and screenshot it. It should list the npm cache and registry paths under **Dev tools**.
+4. **SHELL prompt:**
+   ```text
+   npm init -y; npm install left-pad --no-audit --no-fund
+   ```
+5. **Test window:** `Test-Path C:\SbxTest\repo\node_modules\left-pad` → expect **True**
+
+Step 3 also covers **FS-15**. If your corporate npm uses Artifactory or a private registry, a failure in step 4 may be a network or auth issue rather than the sandbox. Send the error text if it fails.
