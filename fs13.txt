@@ -27,3 +27,40 @@ Your policy shows `c:\src\nodejs` and `c:\src\npm-global`, so npm should be avai
 5. **Test window:** `Test-Path C:\SbxTest\repo\node_modules\left-pad` → expect **True**
 
 Step 3 also covers **FS-15**. If your corporate npm uses Artifactory or a private registry, a failure in step 4 may be a network or auth issue rather than the sandbox. Send the error text if it fails.
+
+
+
+
+
+----------------
+
+
+
+Probably not in **this window's** PATH. The sandbox policy lists `c:\src\nodejs` and `c:\src\npm-global`, which the CLI picks up from **your** PATH. Your test window is an **Administrator** PowerShell (`C:\Windows\system32`), and its PATH can differ. Let's check.
+
+**1. Is npm installed at all?**
+```powershell
+Test-Path C:\src\nodejs\npm.cmd
+& C:\src\nodejs\npm.cmd --version
+```
+- **Version number shown** → npm exists. It just isn't on this window's PATH. Open a **normal** (non-admin) PowerShell as your test window and try `npm --version` again.
+- **False / not found** → `c:\src\nodejs` is probably an **nvm** folder with no active Node version. Run `nvm list`, then `nvm use <version>`, or skip npm.
+
+**2. What does Copilot's shell see?** This is the one that matters. **Session ON**, SHELL prompt:
+```text
+Get-Command npm, node, dotnet -ErrorAction SilentlyContinue | Select-Object Name, Source
+```
+
+**If npm isn't available, use .NET instead.** The policy shows `C:\Program Files\dotnet`, and FS-13 only needs **some** package tool:
+1. **Test window:** `dotnet --version`
+2. **Session ON, SHELL prompt:**
+   ```text
+   dotnet new console -o C:\SbxTest\repo\app --force; dotnet add C:\SbxTest\repo\app package Newtonsoft.Json
+   ```
+3. **Test window:**
+   ```powershell
+   Select-String -Path C:\SbxTest\repo\app\app.csproj -Pattern Newtonsoft
+   ```
+   Expect a match (the package was restored from NuGet).
+
+Send the result of step 1 or the `Get-Command` output, and I'll tell you which route to take.
