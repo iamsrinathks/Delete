@@ -1,39 +1,41 @@
-**NW-08 (local network OFF)** gave a clear and important result: on Windows, `allowLocalNetwork: false` **stops every sandboxed command from starting**, not just local traffic.
+**NW-02 (outbound OFF) passes.** I'll add the NW-08, NW-13 and NW-02 screenshots to the Network doc now.
 
-**What happened**
-- **`/sandbox policy`** shows **Outbound: allowed** and **Local network: blocked**, so the setting was applied.
-- **curl to localhost** → the command **didn't start**: *"Cannot start sandboxed command: Sandboxed commands cannot reach the local proxy because local network access is disabled"*.
-- **curl to the gateway, 172.17.16.1** → the **same error**. The command didn't start.
-- **Server window** → **no new lines after 12:29**. Nothing reached it. The 12:29 lines were your Session OFF runs.
-- **Web fetch to localhost** → *"Sandbox blocks local network access."* So the **fetch tool follows the local-network setting**, which is NW-13 passing.
-- The **`172.17.16.1` "command" that was aborted** didn't count. The IP address was sent as a command on its own and you cancelled the approval prompt. You don't need to redo it.
+Insert takes `source`; resending.
 
-**What it means**
-- On Windows, **every sandboxed command goes through the built-in proxy on 127.0.0.1**. Turning local network off cuts commands off from that proxy, so nothing runs: not git, not npm, nothing.
-- The plan expected this only for **NW-10** (host rules set **and** local network off). It actually happens **even with no host rules**.
-- **Fleet policy decision:** on Windows, **`allowLocalNetwork` must stay `true`**. There's no way to isolate local-network traffic.
-  - Example: a developer's local Postgres on `localhost:5432` stays reachable from the sandbox for any proxy-aware tool. **InfoSec needs to accept this** as a known gap in place of NW-04, which is now closed.
-- **NW-10 is effectively proven.** You can still run it later for completeness: it needs one key change plus one command.
+**NW-02 (outbound OFF) passes.** The NW-08, NW-13 and NW-02 screenshots (9 more) are now in the Network doc.
 
-**Results**
+**What NW-02 shows**
+- **`/sandbox policy`** shows **Outbound: blocked** and **Local network: allowed**. Both settings were applied.
+- **`git ls-remote` to github.com** → *"Failed to connect to github.com port 443"*, exit 128. **Blocked** ✅
+- **curl to github.com with the certificate workaround** → *"(7) Failed to connect to github.com:443"*. **Blocked** ✅
+- **curl to `localhost:18080`** → **HTTP 200**. So **turning outbound off blocks the internet but not local traffic**, as expected.
+- The **`localhost:1808` attempt** had a missing digit in the port and you cancelled it, so it doesn't count. The doc says this.
 
-| ID | Result | Notes |
-| --- | --- | --- |
-| **NW-08** | **Pass + finding** | Local network off blocks localhost and the LAN, but **all sandboxed commands fail to start** on Windows |
-| **NW-13** | **Pass** (local network OFF part) | Web fetch: "Sandbox blocks local network access" |
-| **NW-10** | **Covered by NW-08** | Same error; optional re-run with `allowedHosts` set |
+**Added to the doc**
+- **7.5 NW-08:** policy screenshot, localhost and gateway commands that failed to start, and the server window showing nothing new. Includes the fleet decision: **keep `allowLocalNetwork: true` on Windows**, and add this to the **InfoSec known-gap list**.
+- **7.6 NW-13:** web fetch blocked by *"Sandbox blocks local network access"*.
+- **7.7 NW-02:** policy screenshot, github blocked, localhost allowed.
+- **Results log updated:**
+  - **NW-02:** Pass.
+  - **NW-08:** Pass + finding.
+  - **NW-10:** Pass, already covered by NW-08.
+  - **NW-13:** Pass for the local-network-off part.
 
-**Next: NW-02 (outbound OFF)**
-1. In `settings.json`, set **`"allowLocalNetwork": true`** again **and** **`"allowOutbound": false`**. Save, then `/exit` and start `copilot` again. Take a `/sandbox policy` screenshot.
-2. Send each of these with the SHELL prompt:
-   - `git ls-remote https://github.com/github/copilot-cli HEAD`
-   - `curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 --cacert $env:CURL_CA_BUNDLE --ssl-no-revoke https://github.com`
-   - `curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 http://localhost:18080`, to see whether localhost still works with outbound off.
-3. **Expected:** github is **blocked** for both git and curl. Localhost is likely still **allowed**.
+**Score so far:** **7 of 12** in-scope NW cases done: **NW-01, 02, 04, 08, 09, 10, 13**.
 
-**Before NW-03 and NW-05: pick test hosts the corporate filter allows**
-- wikipedia.org and example.org are not safe choices, because the filter may block them.
-- In **Session OFF**, run curl against two candidates, for example `https://pypi.org` and `https://www.npmjs.com`. Send me the codes.
-- I'll use whichever returns **200** as the "other host" in NW-03 and NW-05.
+**Next: NW-03 (allowlist)**
+1. In `settings.json`, set **`"allowOutbound": true`** again.
+2. **Pick an "other" host the corporate filter allows.** In **Session OFF**, run:
 
-I'll add this set of screenshots (NW-08 and NW-13) to section 7 together with the NW-02 ones, so the doc changes once.
+   ```powershell
+   curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 https://pypi.org
+   ```
+   ```powershell
+   curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 https://www.npmjs.com
+   ```
+   Send me both results. I need one that returns **200** so a block in Session ON can only come from the sandbox.
+3. Then set **`"allowedHosts": ["github.com"]`**, restart, and run in Session ON:
+   - `git ls-remote https://github.com/github/copilot-cli HEAD` → expected **allowed**.
+   - `curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 --cacert $env:CURL_CA_BUNDLE --ssl-no-revoke https://pypi.org` (or whichever host returned 200) → expected **blocked**.
+
+Use the curl workaround (`--cacert $env:CURL_CA_BUNDLE --ssl-no-revoke`) for **every HTTPS curl** from now on. Without it, every HTTPS request fails the certificate check, so a block from the host rules would look the same.
