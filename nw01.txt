@@ -1,46 +1,10 @@
-This set **resolves NW-01**. One thing first: the **first screenshot is Session OFF** (its status line says *"disabled for this session"*), and it also gets the **503 for example.org**. That changes how we read the 503.
+**Ready for Procedure B → NW-08 (local network OFF)**
+1. In `settings.json`, change only `"allowLocalNetwork": true` → **`false`**. Save.
+2. In Session ON, `/exit`, then start `copilot` again from `C:\SbxTest\repo`. Run `/sandbox policy` and take a screenshot.
+3. Send the SHELL prompt with each of these, one at a time:
+   - `curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 http://localhost:18080`, then check the server window for a new line.
+   - The same command with your gateway IP. Get it first in the test window with `(Get-NetRoute 0.0.0.0/0).NextHop`.
+   - `git ls-remote https://github.com/github/copilot-cli HEAD`, to check that the internet still works through the proxy.
+4. Then send the **NW-13 web fetch** prompt for `http://localhost:18080`.
 
-**1. The 503 is not from the sandbox. It's your corporate web filter.**
-- The response body is a **"Web Application Blocked"** page from your company's web filter.
-- **The same 503 appears with the sandbox OFF**, so the corporate filter blocks example.org for everyone.
-- **Action:** stop using `example.org` and `wikipedia.org` as targets. Before any test host is used, I'll check in Session OFF that the corporate filter allows it.
-  - This also means the NW-04 direct connection to wikipedia.org on port 443 reached the filter at the TCP level only. That's fine: NW-04 only proves whether a direct connection is allowed.
-
-**2. The HTTPS failure is a certificate problem only, and curl has a workaround.**
-- `Test-Path $env:CURL_CA_BUNDLE` → **True**. Read in the **same command**, the CA file exists.
-  - The earlier "does not exist" error happened because the path changes on each command. Each shell call gets a **new temporary CA file**, and the old one is deleted.
-- With `--cacert $env:CURL_CA_BUNDLE`, the **certificate chain is accepted**. The new error is ***"the revocation status is unknown"***.
-  - Schannel checks whether the certificate has been revoked. The proxy's own certificate has no revocation URL it can reach, so the check fails.
-- **The likely fix is to add `--ssl-no-revoke`.** Please test it in Session ON with the SHELL prompt:
-
-  ```powershell
-  curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 --cacert $env:CURL_CA_BUNDLE --ssl-no-revoke https://github.com
-  ```
-  - `HTTP 200` means confirmed.
-
-**3. PowerShell `Invoke-WebRequest` has no workaround.**
-- With `-Proxy $env:HTTPS_PROXY`, the request **reaches the proxy** (no more "Unable to connect"). Then it fails with ***"Could not establish trust relationship for the SSL/TLS secure channel"***.
-- PowerShell 5.1 trusts **only the Windows certificate store**, and the Copilot CA isn't in it.
-
-> ⚠️ **Do not fix this by importing the `copilot-credential-ca` file into the Windows certificate store.** Every program on the device, outside the sandbox too, would then trust certificates signed by that CA. That's a **TLS interception risk** for InfoSec. Put this in the user FAQ as a **"never do"**.
-
-**NW-01 result**
-
-| Tool (Session ON, github.com) | Result | Why |
-| --- | --- | --- |
-| **git** | ✅ 200 / exit 0 | Uses `GIT_SSL_CAINFO` + proxy |
-| **built-in `curl.exe`** | ❌ untrusted root | Schannel ignores `CURL_CA_BUNDLE` |
-| **curl + `--cacert $env:CURL_CA_BUNDLE`** | ⚠️ revocation unknown | Proxy certificate has no revocation endpoint |
-| **curl + `--cacert` + `--ssl-no-revoke`** | 🔍 pending your test | Expected ✅ |
-| **`Invoke-WebRequest`** (direct) | ❌ blocked | OS sandbox blocks direct outbound |
-| **`Invoke-WebRequest -Proxy`** | ❌ TLS trust | Windows certificate store only |
-| **Session OFF**, all tools | ✅ | — |
-
-- **Verdict:** **Pass with a compatibility finding.** Outbound is on by default. Tools that read the proxy's CA variables (git, npm, pip, node) work. Tools that use only the Windows certificate store fail.
-
-**Next**
-1. Send the `--ssl-no-revoke` result.
-2. Then start **Procedure B → NW-08**: set `"allowLocalNetwork": false`, restart the session, take a `/sandbox policy` screenshot.
-   - In NW-08 step 5, use **git** (`git ls-remote https://github.com/github/copilot-cli HEAD`) as the internet check instead of curl, because git is the tool we know works.
-
-I'll write all of this into the Network doc and the Test & Validation Plan (NW-01, NW-04 and the FAQ items) when Procedure A screenshots go into section 7.
+Also expect the possibility that **every command fails at start** after this change. The built-in proxy listens on 127.0.0.1, so turning local network off might cut the shell off from its own proxy. That is the **NW-10** behaviour, and if it happens here it's a finding too.
