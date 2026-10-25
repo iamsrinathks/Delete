@@ -1,55 +1,46 @@
-Good diagnosis. The picture is clearer now, and it's **less serious than I feared**.
+This set **resolves NW-01**. One thing first: the **first screenshot is Session OFF** (its status line says *"disabled for this session"*), and it also gets the **503 for example.org**. That changes how we read the 503.
 
-**What the outputs show**
-- **The github.com certificate issuer outside the sandbox is Sectigo.** There's **no corporate TLS inspection** on your network, so cause B is ruled out.
-- **The sandbox sets its own proxy and certificate authority (CA) for every command:**
-  - `HTTP(S)_PROXY = 127.0.0.1:61811`, the Copilot proxy.
-  - `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and `SSL_CERT_FILE` all point to **`copilot-credential-ca-*.pem`** in your Temp folder.
-  - So the proxy **decrypts HTTPS and re-signs it with a Copilot CA** (cause A). The file name suggests this is how the sandbox **adds your git and gh credentials** to requests.
-- **`git ls-remote` worked, exit 0.** git reads `GIT_SSL_CAINFO`, so **git over HTTPS is fine**. Node, npm and Python `requests` should be fine for the same reason, because they read the other variables.
-- **The `curl.exe` built into Windows failed.** It checks certificates with Schannel, the Windows certificate store, and **ignores `CURL_CA_BUNDLE`**.
-- **`--cacert` with the copied path → "file does not exist".**
-  - Most likely the CA file is **created for each command and deleted afterwards**, so a path copied from an earlier command is already gone.
-  - We'll check by reading the variable inside the same command.
-- **`http://example.org` → `HTTP 503`.** Plain HTTP through the proxy fails. We need the response body to know why.
+**1. The 503 is not from the sandbox. It's your corporate web filter.**
+- The response body is a **"Web Application Blocked"** page from your company's web filter.
+- **The same 503 appears with the sandbox OFF**, so the corporate filter blocks example.org for everyone.
+- **Action:** stop using `example.org` and `wikipedia.org` as targets. Before any test host is used, I'll check in Session OFF that the corporate filter allows it.
+  - This also means the NW-04 direct connection to wikipedia.org on port 443 reached the filter at the TCP level only. That's fine: NW-04 only proves whether a direct connection is allowed.
 
-**Updated severity**
-- **Not a stop-ship.** git works, and npm/pip/node should too; we'll confirm npm on the Ring 0 device in FS-13.
-- **A compatibility finding:** tools that use only the **Windows certificate store** fail on HTTPS inside the sandbox:
-  - the built-in `curl.exe`
-  - PowerShell `Invoke-WebRequest` and `Invoke-RestMethod`
-  - .NET `HttpClient`
-  - Example: a developer's script that calls `Invoke-RestMethod https://api.github.com/...` will fail in a sandboxed session, but the same call works with `git`.
+**2. The HTTPS failure is a certificate problem only, and curl has a workaround.**
+- `Test-Path $env:CURL_CA_BUNDLE` → **True**. Read in the **same command**, the CA file exists.
+  - The earlier "does not exist" error happened because the path changes on each command. Each shell call gets a **new temporary CA file**, and the old one is deleted.
+- With `--cacert $env:CURL_CA_BUNDLE`, the **certificate chain is accepted**. The new error is ***"the revocation status is unknown"***.
+  - Schannel checks whether the certificate has been revoked. The proxy's own certificate has no revocation URL it can reach, so the check fails.
+- **The likely fix is to add `--ssl-no-revoke`.** Please test it in Session ON with the SHELL prompt:
 
-**Run these four commands to confirm (Session ON, SHELL prompt, one at a time)**
+  ```powershell
+  curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 --cacert $env:CURL_CA_BUNDLE --ssl-no-revoke https://github.com
+  ```
+  - `HTTP 200` means confirmed.
 
-1. Can curl use the CA file if it reads the path in the same command?
-   ```powershell
-   Test-Path $env:CURL_CA_BUNDLE; curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 --cacert $env:CURL_CA_BUNDLE https://github.com
-   ```
-   - `True` then `HTTP 200` means the workaround works: `--cacert $env:CURL_CA_BUNDLE`.
+**3. PowerShell `Invoke-WebRequest` has no workaround.**
+- With `-Proxy $env:HTTPS_PROXY`, the request **reaches the proxy** (no more "Unable to connect"). Then it fails with ***"Could not establish trust relationship for the SSL/TLS secure channel"***.
+- PowerShell 5.1 trusts **only the Windows certificate store**, and the Copilot CA isn't in it.
 
-2. Why does plain HTTP return 503?
-   ```powershell
-   curl.exe -sS -i --max-time 15 http://example.org 2>&1 | Select-Object -First 15
-   ```
+> ⚠️ **Do not fix this by importing the `copilot-credential-ca` file into the Windows certificate store.** Every program on the device, outside the sandbox too, would then trust certificates signed by that CA. That's a **TLS interception risk** for InfoSec. Put this in the user FAQ as a **"never do"**.
 
-3. Does PowerShell work when you point it at the proxy?
-   ```powershell
-   (Invoke-WebRequest -Uri https://github.com -Proxy $env:HTTPS_PROXY -UseBasicParsing -TimeoutSec 15).StatusCode
-   ```
-   - I expect a certificate trust error. That would confirm PowerShell users have no simple workaround.
+**NW-01 result**
 
-4. **Session OFF** only:
-   ```powershell
-   curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 http://example.org
-   ```
-   - This checks whether the 503 comes from the sandbox proxy or from example.org itself.
+| Tool (Session ON, github.com) | Result | Why |
+| --- | --- | --- |
+| **git** | ✅ 200 / exit 0 | Uses `GIT_SSL_CAINFO` + proxy |
+| **built-in `curl.exe`** | ❌ untrusted root | Schannel ignores `CURL_CA_BUNDLE` |
+| **curl + `--cacert $env:CURL_CA_BUNDLE`** | ⚠️ revocation unknown | Proxy certificate has no revocation endpoint |
+| **curl + `--cacert` + `--ssl-no-revoke`** | 🔍 pending your test | Expected ✅ |
+| **`Invoke-WebRequest`** (direct) | ❌ blocked | OS sandbox blocks direct outbound |
+| **`Invoke-WebRequest -Proxy`** | ❌ TLS trust | Windows certificate store only |
+| **Session OFF**, all tools | ✅ | — |
 
-**Results so far**
+- **Verdict:** **Pass with a compatibility finding.** Outbound is on by default. Tools that read the proxy's CA variables (git, npm, pip, node) work. Tools that use only the Windows certificate store fail.
 
-| ID | ON | OFF | Result |
-| --- | --- | --- | --- |
-| **NW-09** localhost | curl 200 (through the proxy) · `Invoke-WebRequest` blocked (direct connection) | 200 / 200 | **Pass + finding** |
-| **NW-04** direct connect | **Blocked** ("forbidden by its access permissions") | True | **Pass, better than the plan**. The known gap is closed on build 26100.9711 |
-| **NW-01** default outbound | git ✅ · built-in curl ❌ (Copilot CA not trusted) · `Invoke-WebRequest` ❌ | curl 200 · `Invoke-WebRequest` 200 | **Partial**, waiting on commands 1–4 |
+**Next**
+1. Send the `--ssl-no-revoke` result.
+2. Then start **Procedure B → NW-08**: set `"allowLocalNetwork": false`, restart the session, take a `/sandbox policy` screenshot.
+   - In NW-08 step 5, use **git** (`git ls-remote https://github.com/github/copilot-cli HEAD`) as the internet check instead of curl, because git is the tool we know works.
+
+I'll write all of this into the Network doc and the Test & Validation Plan (NW-01, NW-04 and the FAQ items) when Procedure A screenshots go into section 7.
