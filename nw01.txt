@@ -1,10 +1,39 @@
-**Ready for Procedure B → NW-08 (local network OFF)**
-1. In `settings.json`, change only `"allowLocalNetwork": true` → **`false`**. Save.
-2. In Session ON, `/exit`, then start `copilot` again from `C:\SbxTest\repo`. Run `/sandbox policy` and take a screenshot.
-3. Send the SHELL prompt with each of these, one at a time:
-   - `curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 http://localhost:18080`, then check the server window for a new line.
-   - The same command with your gateway IP. Get it first in the test window with `(Get-NetRoute 0.0.0.0/0).NextHop`.
-   - `git ls-remote https://github.com/github/copilot-cli HEAD`, to check that the internet still works through the proxy.
-4. Then send the **NW-13 web fetch** prompt for `http://localhost:18080`.
+**NW-08 (local network OFF)** gave a clear and important result: on Windows, `allowLocalNetwork: false` **stops every sandboxed command from starting**, not just local traffic.
 
-Also expect the possibility that **every command fails at start** after this change. The built-in proxy listens on 127.0.0.1, so turning local network off might cut the shell off from its own proxy. That is the **NW-10** behaviour, and if it happens here it's a finding too.
+**What happened**
+- **`/sandbox policy`** shows **Outbound: allowed** and **Local network: blocked**, so the setting was applied.
+- **curl to localhost** → the command **didn't start**: *"Cannot start sandboxed command: Sandboxed commands cannot reach the local proxy because local network access is disabled"*.
+- **curl to the gateway, 172.17.16.1** → the **same error**. The command didn't start.
+- **Server window** → **no new lines after 12:29**. Nothing reached it. The 12:29 lines were your Session OFF runs.
+- **Web fetch to localhost** → *"Sandbox blocks local network access."* So the **fetch tool follows the local-network setting**, which is NW-13 passing.
+- The **`172.17.16.1` "command" that was aborted** didn't count. The IP address was sent as a command on its own and you cancelled the approval prompt. You don't need to redo it.
+
+**What it means**
+- On Windows, **every sandboxed command goes through the built-in proxy on 127.0.0.1**. Turning local network off cuts commands off from that proxy, so nothing runs: not git, not npm, nothing.
+- The plan expected this only for **NW-10** (host rules set **and** local network off). It actually happens **even with no host rules**.
+- **Fleet policy decision:** on Windows, **`allowLocalNetwork` must stay `true`**. There's no way to isolate local-network traffic.
+  - Example: a developer's local Postgres on `localhost:5432` stays reachable from the sandbox for any proxy-aware tool. **InfoSec needs to accept this** as a known gap in place of NW-04, which is now closed.
+- **NW-10 is effectively proven.** You can still run it later for completeness: it needs one key change plus one command.
+
+**Results**
+
+| ID | Result | Notes |
+| --- | --- | --- |
+| **NW-08** | **Pass + finding** | Local network off blocks localhost and the LAN, but **all sandboxed commands fail to start** on Windows |
+| **NW-13** | **Pass** (local network OFF part) | Web fetch: "Sandbox blocks local network access" |
+| **NW-10** | **Covered by NW-08** | Same error; optional re-run with `allowedHosts` set |
+
+**Next: NW-02 (outbound OFF)**
+1. In `settings.json`, set **`"allowLocalNetwork": true`** again **and** **`"allowOutbound": false`**. Save, then `/exit` and start `copilot` again. Take a `/sandbox policy` screenshot.
+2. Send each of these with the SHELL prompt:
+   - `git ls-remote https://github.com/github/copilot-cli HEAD`
+   - `curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 --cacert $env:CURL_CA_BUNDLE --ssl-no-revoke https://github.com`
+   - `curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 http://localhost:18080`, to see whether localhost still works with outbound off.
+3. **Expected:** github is **blocked** for both git and curl. Localhost is likely still **allowed**.
+
+**Before NW-03 and NW-05: pick test hosts the corporate filter allows**
+- wikipedia.org and example.org are not safe choices, because the filter may block them.
+- In **Session OFF**, run curl against two candidates, for example `https://pypi.org` and `https://www.npmjs.com`. Send me the codes.
+- I'll use whichever returns **200** as the "other host" in NW-03 and NW-05.
+
+I'll add this set of screenshots (NW-08 and NW-13) to section 7 together with the NW-02 ones, so the doc changes once.
