@@ -1,43 +1,54 @@
-**pypi.org returns 200 in Session OFF**, so it's our **"other" host**. npmjs.com was reset by the corporate filter (`Connection was reset`), so I'm leaving it out.
+**NW-03 (allowlist) passes**, and `/sandbox policy` shows something useful.
 
-**One more quick check in Session OFF**, so the hosts for NW-05, NW-06 and NW-14 are cleared in advance:
+**What the screenshots show**
+- **`/sandbox policy`** now has a **Host filter: local proxy** section:
+  - `Allow: github.com`, which you set.
+  - `Allow: localhost`, `127.0.0.1` and `::1`, which **the CLI adds automatically**.
+  - So **loopback is always allowed** once you set an allowlist. That fits the NW-08 finding: on Windows, commands need loopback to reach the proxy.
+- **Session ON:**
+  - `git ls-remote github.com` → ✅ exit 0.
+  - `curl github.com` with the certificate workaround → ✅ **HTTP 200**.
+  - `curl pypi.org` → ⛔ **"CONNECT tunnel failed, response 403"**, with the CLI note *"sandbox is active and blocked this command's network access"*.
+  - pypi.org returned **200 in Session OFF**, so this **block comes from the sandbox allowlist**. Pass ✅
+- **Python check: invalid test, not a network result.**
+  - `python.exe` → *"The file cannot be accessed by the system"*.
+  - Most likely `python` is only the **Microsoft Store alias** (`WindowsApps\python.exe`), and the sandbox can't open it. To confirm, run in the **test window**: `Get-Command python | Select-Object Source`.
+  - If the path contains `WindowsApps`, add it to the FAQ: *"Store Python aliases don't run in the sandbox. Install Python properly."*
+- **Session OFF host checks:**
+  - `api.github.com` → **200** ✅, usable.
+  - `test.pypi.org` and `1.1.1.1` → **connection reset by the corporate filter** ❌, so not usable.
 
-```powershell
-curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 https://api.github.com
-```
-```powershell
-curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 https://test.pypi.org
-```
-```powershell
-curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 https://1.1.1.1
-```
+**Next tests in Session ON. Change `settings.json` before each test, then `/exit` and restart. Use C1 with the certificate workaround:** `curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 --cacert $env:CURL_CA_BUNDLE --ssl-no-revoke <URL>`
 
-**Now NW-03 (allowlist), in Session ON**
-1. In `settings.json`, inside `"network"`:
-   - `"allowOutbound": true`
-   - `"allowLocalNetwork": true`
-   - `"allowedHosts": ["github.com"]`
-2. Save. Then `/exit`, start `copilot` again, run **`/sandbox policy`** and take a screenshot. It should list github.com as an allowed host.
-3. Send these with the SHELL prompt, one at a time:
-   - **Allowed host via git**, expected ✅:
-     ```powershell
-     git ls-remote https://github.com/github/copilot-cli HEAD
-     ```
-   - **Allowed host via curl**, expected ✅ `HTTP 200`:
-     ```powershell
-     curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 --cacert $env:CURL_CA_BUNDLE --ssl-no-revoke https://github.com
-     ```
-   - **Host not on the list**, expected ⛔ blocked by the proxy, with a 403 or a CONNECT error:
-     ```powershell
-     curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 --cacert $env:CURL_CA_BUNDLE --ssl-no-revoke https://pypi.org
-     ```
-   - **Host not on the list, via pip-style Python**, expected ⛔. Skip this one if Python isn't installed:
-     ```powershell
-     python -c "import urllib.request as u; print(u.urlopen('https://pypi.org', timeout=15).status)"
-     ```
+**NW-06, wildcard**
+- Set `"allowedHosts": ["*.github.com"]`.
+- Run `/sandbox policy` and take a screenshot.
+- C1 `https://api.github.com` → expected ✅ 200.
+- C1 `https://github.com` → expected ⛔ 403, because `*.` doesn't cover the bare domain.
 
-**How to read the result**
-- pypi.org returned **200 in Session OFF**, so a **block in Session ON** can only come from the **sandbox allowlist**.
-- The NW-04 direct-connection part is already closed, because direct sockets are blocked anyway. No need to repeat it.
+**NW-05, blocklist** (also tests that a block wins over an allow)
+- Set:
+  ```json
+  "allowedHosts": ["github.com", "*.github.com", "pypi.org"],
+  "blockedHosts": ["github.com"]
+  ```
+- Run `/sandbox policy` and take a screenshot.
+- C1 `https://github.com` → expected ⛔.
+- C1 `https://api.github.com` → expected ⛔. The block covers subdomains and wins over the `*.github.com` allow.
+- C1 `https://pypi.org` → expected ✅ 200.
 
-Send the screenshots. After that, NW-06 (wildcard) and NW-05 (blocklist) use the same pattern with `api.github.com` and `test.pypi.org`.
+**NW-14, IP and CIDR**
+- 1.1.1.1 is filtered, so first get a real pypi.org IP in the **test window**:
+  ```powershell
+  (Resolve-DnsName pypi.org -Type A)[0].IPAddress
+  ```
+- Set `"allowedHosts": ["<that IP>"]` and `"blockedHosts": []`. Restart, then C1 `https://<that IP>`.
+  - **Pass** = no "CONNECT ... 403". A certificate-name error is fine here, because the certificate is for pypi.org, not the IP.
+- Change to `"allowedHosts": ["<first three parts of the IP>.0/24"]`, for example `151.101.0.0/24`. Restart. Take a screenshot of any warning at start, plus `/sandbox policy`, then C1 again.
+  - **Expected:** CIDR is ignored or rejected, so ⛔ 403.
+
+**Then**
+- **NW-11:** `"allowedHosts": []`, local network on. Run the agent-started server command from the doc.
+- **NW-13:** the ON part, web fetch to localhost with local network allowed.
+
+I'll add the NW-03 screenshots to the doc together with this next set.
