@@ -1,0 +1,37 @@
+`!` commands **run inside the sandbox**: the line is labelled **"(sandboxed)"** and `HTTPS_PROXY` is set to the Copilot proxy (`127.0.0.1:63062`). Running a command with `!` doesn't go through the model, so it won't refuse. We can use this for all the credential tests.
+
+**Run these in Session ON, one at a time. Paste each line as it is, starting with `!`.**
+
+**1. CR-03: is the real token visible?**
+```text
+!$H = { param($n,$s) if (-not $s) { "$n = EMPTY" } else { $s = "$s".Trim(); $x = -join ([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($s))[0..5] | ForEach-Object { $_.ToString('x2') }); "$n = $($s.Substring(0,[Math]::Min(4,$s.Length)))… len $($s.Length) hash $x" } }; & $H 'gh auth token' (gh auth token); & $H 'GH_TOKEN' $env:GH_TOKEN; & $H 'GITHUB_TOKEN' $env:GITHUB_TOKEN; & $H 'git credential' (("protocol=https`nhost=github.com`n`n" | git credential fill 2>$null | Select-String '^password=') -replace '^password=','')
+```
+- Also run the same command **without the `!`** in the **test window**. That gives the real hashes to compare against.
+
+**2. CR-02: does gh work?**
+```text
+!gh api user --jq .login; gh repo view --json name,visibility
+```
+
+**3. CR-04: is the token sent to another host?** Then take a screenshot of the **server window**.
+```text
+!$t = gh auth token; curl.exe -s -H "Authorization: Bearer $t" http://localhost:18082/
+```
+- Run the same `!` command in **Session OFF** as well, so the server window logs both hashes for comparison.
+
+**4. CR-11: are credential stores on disk readable?**
+```text
+!$p = "$env:USERPROFILE\.git-credentials","$env:USERPROFILE\.npmrc","$env:APPDATA\GitHub CLI\hosts.yml","$env:APPDATA\NuGet\NuGet.Config"; foreach ($f in $p) { try { $c = Get-Content $f -Raw -ErrorAction Stop; "READABLE $f ($($c.Length) chars)" } catch { "BLOCKED/NONE $f : $($_.Exception.Message)" } }; cmdkey /list | Select-String github | ForEach-Object { 'CredMan: ' + $_.Line.Trim() }
+```
+
+**5. CR-01: git push**, after the SSO check from my last message:
+```text
+!git push -u origin sbx-on-1
+```
+
+**What to look for**
+- **CR-03:** a Session ON hash that **matches** the test-window hash is a 🔴 critical finding.
+- **CR-04:** the server window should show a **different hash** for Session ON than for Session OFF.
+- **CR-11:** `.npmrc` and `hosts.yml` should be **blocked** in ON, because home-folder reads are blocked (FS-06).
+
+Send me all five screenshots plus the server window. Then I'll add Procedure A to the doc.
