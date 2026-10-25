@@ -1,1 +1,36 @@
-$l = New-Object Net.HttpListener; $l.Prefixes.Add('http://localhost:18080/'); $l.Start(); 'Server running on 18080'; while ($true) { $c = $l.GetContext(); $from = "$($c.Request.RemoteEndPoint)"; $c.Response.ContentType = 'text/plain'; $b = [Text.Encoding]::UTF8.GetBytes('SBX-LOCAL-OK'); $c.Response.OutputStream.Write($b, 0, $b.Length); $c.Response.Close(); "$(Get-Date -f T) request from $from" }
+**NW-01 cannot pass until the certificate issue is understood. Run these to find the cause**
+
+1. **Test window** (outside Copilot): who issues the github.com certificate you normally see?
+
+   ```powershell
+   $c = New-Object Net.Sockets.TcpClient('github.com',443); $s = New-Object Net.Security.SslStream($c.GetStream()); $s.AuthenticateAsClient('github.com'); $s.RemoteCertificate.Issuer; $c.Close()
+   ```
+   - If the issuer is **DigiCert or Sectigo** → no corporate inspection.
+   - If it is **Zscaler, Netskope or a company CA** → corporate TLS inspection is in the path, which points to cause B.
+
+2. **Session ON**, with the SHELL prompt: which proxy and CA settings does the sandbox give the shell?
+
+   ```powershell
+   Get-ChildItem env: | Where-Object Name -match 'PROXY|CERT|SSL|_CA' | Format-Table Name, Value -AutoSize -Wrap
+   ```
+
+3. **Session ON**, SHELL prompt: does git fail the same way?
+
+   ```powershell
+   git ls-remote https://github.com/github/copilot-cli HEAD
+   ```
+
+4. **Session ON**, SHELL prompt: does plain HTTP (no TLS) work to the internet?
+
+   ```powershell
+   curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 http://example.org
+   ```
+
+5. **Only if step 2 shows a CA file**, for example in `SSL_CERT_FILE` or `NODE_EXTRA_CA_CERTS`, send this with the SHELL prompt (replace `<path>` with that file):
+
+   ```powershell
+   curl.exe -sS -o NUL -w "HTTP %{http_code}" --max-time 15 --cacert "<path>" https://github.com
+   ```
+   - If this returns 200, the proxy's CA exists but curl doesn't use it by default. That's cause A, and the fix is configuration only.
+
+Send me the five outputs. The blocker and NW-04 are both important for the rollout decision, so I'll update the Network doc and the plan once we know the cause.
