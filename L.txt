@@ -1,32 +1,26 @@
-The helper is **defined now**. The ` ``` ` error is harmless: the code-block fence was copied by accident.
+Something isn't right yet: **gh still gets a placeholder and still works** (it shows your login). Either the setting **wasn't applied**, or **`auth.gh: false` has no effect**. That second case would be a finding. One check tells us which.
 
-But **the CR-06 settings haven't been applied yet.**
-- This Session ON output still matches the **CR-05 setup**: `git credential` = EMPTY, gh = placeholder (`aa0aacb0de76`).
-- So `Set-Sbx` hasn't been run since you defined it, or the session wasn't restarted afterwards.
+**Run these two checks**
 
-**Do this now**
-
-1. **🖥 TEST.** Paste **only this line**, without the backticks:
+1. **🖥 TEST:** what does the file say now?
 ```powershell
-Set-Sbx 'auth.git' $true; Set-Sbx 'auth.gh' $false
+(Get-Content $env:USERPROFILE\.copilot\settings.json -Raw | ConvertFrom-Json).sandbox.auth
 ```
-   **Expected output:**
-   ```text
-   sandbox.auth.git = True
-   sandbox.auth.gh = False
-   ```
+   - **Expected:** `git : True` and `gh : False`.
+   - If it still shows `gh : True`, the `Set-Sbx` line didn't run. Run it again:
+     ```powershell
+     Set-Sbx 'auth.git' $true; Set-Sbx 'auth.gh' $false
+     ```
 
-2. **🟢 ON:** type `/exit`, then `copilot`, then `/sandbox policy`. Take a screenshot showing:
-   - **Authenticate git: on**
-   - **Authenticate gh: off**
-   - **sandbox enabled**
+2. **🟢 ON:** `/exit`, then `copilot`, then `/sandbox policy`. Take a screenshot of the **Capabilities** section.
+   - Then run `!gh api user --jq .login` once more.
 
-3. **🟢 ON:**
-```text
-!gh api user --jq .login
-```
+**How to read the results**
 
-4. **🟢 ON:** the same `!$H = …` hash command as before.
+| `/sandbox policy` says | gh result | Meaning |
+| --- | --- | --- |
+| Authenticate gh: **off** | **fails** / not logged in | ✅ CR-06 **passes**. The earlier run just hadn't restarted the session |
+| Authenticate gh: **off** | **still shows your login** | 🔴 **Finding:** `auth.gh: false` doesn't stop gh credential injection |
+| Authenticate gh: **on** | — | The setting wasn't saved. Repeat step 1 |
 
-**Expected:** `GH_TOKEN` = **EMPTY**, `gh` **not logged in** or failing, and `git credential` = **EMPTY**.
-- `git credential` stays EMPTY even with git authentication on. The proxy adds the git credential to the request at the network level; it isn't stored somewhere the sandbox can read.
+**One more detail from this run:** the placeholder changed between two commands in the **same session** (`aa0aacb0de76` → `759599b34513`). So a **new placeholder is created for each command**, not just for each session. That's good: a captured placeholder is useless almost immediately. I'll record it under CR-03.
