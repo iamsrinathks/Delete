@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GKE Node Capacity Report</title>
+<style>
+:root{
+  --bg:#f6f6f3;--surface:#ffffff;--surface-2:#f0efea;--text:#1c1c1a;--muted:#5e5d57;--border:#e0dfd8;
+  --accent:#0e6b6b;--current:#0e6b6b;--p95:#86b9b8;--peak:#d3e6e5;--marker:#1c1c1a;
+  --base:#3a6ea5;--growth:#9dbbdc;--surge:#c2410c;--grid:#e8e7e1;
+  --warn-bg:#fff3e0;--warn:#8a4500;--bad-bg:#fde8e7;--bad:#a52019;--ok-bg:#e5f4e7;--ok:#1d6b34;
+  --flow-src:#eef4fb;--flow-step:#e9f3f2;--flow-out:#fbf1e9;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#131312;--surface:#1c1c1a;--surface-2:#252522;--text:#ecebe5;--muted:#a3a29a;--border:#34342f;
+    --accent:#5cc2c1;--current:#6fd0cf;--p95:#2f7978;--peak:#21403f;--marker:#ecebe5;
+    --base:#6b9fd8;--growth:#36577d;--surge:#f28b4f;--grid:#2c2c28;
+    --warn-bg:#3a2a12;--warn:#f2b66d;--bad-bg:#3d1a18;--bad:#f59b94;--ok-bg:#17301e;--ok:#8fd6a2;
+    --flow-src:#1d2a38;--flow-step:#1b302f;--flow-out:#33261c;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#131312;--surface:#1c1c1a;--surface-2:#252522;--text:#ecebe5;--muted:#a3a29a;--border:#34342f;
+  --accent:#5cc2c1;--current:#6fd0cf;--p95:#2f7978;--peak:#21403f;--marker:#ecebe5;
+  --base:#6b9fd8;--growth:#36577d;--surge:#f28b4f;--grid:#2c2c28;
+  --warn-bg:#3a2a12;--warn:#f2b66d;--bad-bg:#3d1a18;--bad:#f59b94;--ok-bg:#17301e;--ok:#8fd6a2;
+  --flow-src:#1d2a38;--flow-step:#1b302f;--flow-out:#33261c;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--text);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+.wrap{max-width:1120px;margin:0 auto;padding:24px 16px 64px}
+h1{font-size:1.55rem;margin:0 0 4px;letter-spacing:-.01em}
+h2{font-size:1.15rem;margin:0 0 4px}
+h3{font-size:.95rem;margin:16px 0 6px}
+p{margin:0 0 8px}
+.lead{color:var(--muted);margin:0 0 16px;max-width:760px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px;margin:0 0 16px}
+.sub{color:var(--muted);font-size:.88rem;margin:0 0 12px}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:end}
+.controls label{display:flex;flex-direction:column;font-size:.8rem;color:var(--muted);gap:4px}
+select,button,.filebtn{font:inherit;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:7px 10px;min-height:38px}
+select{min-width:280px;max-width:100%}
+button,.filebtn{cursor:pointer}
+button:hover,.filebtn:hover{background:var(--surface-2)}
+.filebtn input{display:none}
+.status{font-size:.85rem;color:var(--muted);flex-basis:100%}
+.banner{border-radius:10px;padding:10px 14px;margin:0 0 16px;font-size:.9rem}
+.banner.warn{background:var(--warn-bg);color:var(--warn)}
+.meta{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:.85rem;color:var(--muted)}
+.meta b{color:var(--text);font-weight:600}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:0 0 16px}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px}
+.kpi .v{font-size:1.7rem;font-weight:650;line-height:1.1;font-variant-numeric:tabular-nums}
+.kpi .l{font-size:.82rem;color:var(--muted);margin-top:4px}
+.kpi.bad .v{color:var(--bad)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.82rem;color:var(--muted);margin:8px 0 0}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.sw{width:14px;height:10px;border-radius:2px;display:inline-block}
+.sw.line{width:3px;height:14px}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+svg{display:block;width:100%;height:auto}
+svg text{fill:var(--text);font-family:inherit}
+svg .muted{fill:var(--muted)}
+svg .grid{stroke:var(--grid);stroke-width:1}
+svg .peak{fill:var(--peak)} svg .p95{fill:var(--p95)} svg .current{fill:var(--current)}
+svg .base{fill:var(--base)} svg .growth{fill:var(--growth)} svg .surge{fill:var(--surge)}
+svg .marker{stroke:var(--marker);stroke-width:2.5}
+svg .exmark{stroke:var(--surge);stroke-width:2;stroke-dasharray:3 2}
+svg .box-src{fill:var(--flow-src);stroke:var(--border)}
+svg .box-step{fill:var(--flow-step);stroke:var(--border)}
+svg .box-out{fill:var(--flow-out);stroke:var(--border)}
+svg .box-script{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:5 4}
+svg .arrow{stroke:var(--muted);stroke-width:1.4;fill:none}
+svg .arrowhead{fill:var(--muted)}
+svg .notres{fill:var(--grid)}
+table{border-collapse:collapse;width:100%;font-size:.86rem;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+th{font-size:.76rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600;background:var(--surface-2);position:sticky;top:0}
+td.n,th.n{text-align:right}
+tbody tr:hover{background:var(--surface-2)}
+.tag{display:inline-block;border-radius:999px;padding:1px 8px;font-size:.75rem;font-weight:600}
+.tag.bad{background:var(--bad-bg);color:var(--bad)}
+.tag.warn{background:var(--warn-bg);color:var(--warn)}
+.tag.ok{background:var(--ok-bg);color:var(--ok)}
+.doc td:first-child{font-weight:600;white-space:nowrap}
+.doc td{width:auto}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+.cols ul,.cols ol{margin:0;padding-left:20px}
+.cols li{margin:0 0 6px}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.84em;background:var(--surface-2);padding:1px 5px;border-radius:4px;word-break:break-word}
+pre{background:var(--surface-2);border-radius:8px;padding:12px;overflow-x:auto;font-size:.82rem;margin:8px 0}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
+.tabs button{min-height:32px;padding:4px 12px;font-size:.85rem}
+.tabs button[aria-selected="true"]{background:var(--accent);color:var(--surface);border-color:var(--accent)}
+footer{color:var(--muted);font-size:.8rem;margin-top:24px}
+#tableBox table{min-width:680px}
+@media (max-width:600px){h1{font-size:1.3rem}.card{padding:14px}select{min-width:0;width:100%}.controls label{flex:1 1 100%}}
+@media (max-width:720px){
+  .doc table thead{display:none}
+  .doc table,.doc tbody,.doc tr,.doc td{display:block;width:100%}
+  .doc tr{border-bottom:1px solid var(--border);padding:8px 0}
+  .doc td{border:0;padding:3px 0}
+  .doc td:first-child{font-size:1rem}
+  .doc td[data-label]:not(:first-child)::before{content:attr(data-label);display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>GKE Node Capacity Report</h1>
+    <p class="lead">This page shows node counts per node pool, zone and machine shape. Use it to size Compute Engine reservations for each cluster.</p>
+  </header>
+
+  <section class="card" aria-label="Select data">
+    <div class="controls">
+      <label>Cluster / project
+        <select id="sel" aria-label="Select cluster and project"></select>
+      </label>
+      <span class="filebtn" role="button" tabindex="0" id="loadBtn">Load report_data.json
+        <input type="file" id="file" accept=".json,application/json" multiple>
+      </span>
+      <button id="theme" type="button" aria-label="Switch colour theme">Theme: auto</button>
+      <div class="status" id="status"></div>
+    </div>
+  </section>
+
+  <div id="sampleBanner" class="banner warn" hidden>This page shows sample data. Load your report_data.json files to see real clusters.</div>
+
+  <section class="card">
+    <h2 id="title">Cluster</h2>
+    <div class="meta" id="meta"></div>
+  </section>
+
+  <div class="kpis" id="kpis"></div>
+
+  <section class="card">
+    <h2>Data flow</h2>
+    <p class="sub">The script reads five read-only sources. It writes CSV files, report_data.json and this page.</p>
+    <div class="scroll"><div style="min-width:640px" id="flow"></div></div>
+  </section>
+
+  <section class="card">
+    <h2>Current and peak usage by node pool and zone</h2>
+    <p class="sub">Each row is one node pool in one zone. Compare today's nodes with the historical P95 and peak.</p>
+    <div class="scroll"><div style="min-width:560px" id="usage"></div></div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--current)"></i>Current (running VMs)</span>
+      <span><i class="sw" style="background:var(--p95)"></i>P95</span>
+      <span><i class="sw" style="background:var(--peak)"></i>Peak</span>
+      <span><i class="sw line" style="background:var(--surge)"></i>Peak without upgrade windows</span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Reservation sizing input by machine shape and zone</h2>
+    <p class="sub">Reservations match one machine shape in one zone. The bar shows peak, growth and surge headroom.</p>
+    <div class="scroll"><div style="min-width:560px" id="sizing"></div></div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--base)"></i>Peak without upgrade windows</span>
+      <span><i class="sw" style="background:var(--growth)"></i>Growth</span>
+      <span><i class="sw" style="background:var(--surge)"></i>Surge headroom</span>
+      <span><i class="sw line" style="background:var(--marker)"></i>Current running VMs</span>
+      <span><i class="sw" style="background:var(--grid)"></i>Not reservable (Spot or unmapped)</span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Detail tables</h2>
+    <div class="tabs" role="tablist" id="tabs"></div>
+    <div class="scroll" id="tableBox"></div>
+  </section>
+
+  <section class="card doc">
+    <h2>Metric guide</h2>
+    <p class="sub">Each metric has one meaning and one use. Read the "How to use it" column before you size a reservation.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Metric</th><th>What it shows</th><th>How we measure it</th><th>How to use it</th></tr></thead>
+        <tbody id="docRows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>How to read and use this report</h2>
+    <div class="cols">
+      <div>
+        <h3>Read the charts</h3>
+        <ul>
+          <li>Start with the sizing chart. It shows one bar for each reservation you need.</li>
+          <li>Compare the black line with the bar. The gap is your unused reserved capacity.</li>
+          <li>Check the usage chart for zones that peak higher than other zones.</li>
+          <li>Check the autoscaler table for failed scale-ups. They show real stockouts.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Make the report</h3>
+        <ol>
+          <li>Run the script once for each cluster.</li>
+          <li>Open report.html from the output folder.</li>
+          <li>To compare clusters, load more report_data.json files here.</li>
+          <li>Or merge them with the <code>build-html</code> command.</li>
+        </ol>
+        <pre>python3 gke_node_peaks.py build-html \
+  --out all-clusters.html \
+  node-peaks-*/report_data.json</pre>
+      </div>
+      <div>
+        <h3>Know the limits</h3>
+        <ul>
+          <li>A reservation holds VM capacity only. It does not schedule Pods.</li>
+          <li>Pods also need correct requests, tolerations and quota.</li>
+          <li>A specific reservation caps pool history. Real demand can be higher.</li>
+          <li>The sizing input is a starting point. Review it before you reserve.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer>Self-contained page. It uses no external scripts, fonts or styles. Data stays in your browser.</footer>
+</div>
+
+<script>
+/* The script replaces the next token with real data when it writes report.html. */
+const EMBEDDED = /*__REPORT_DATA__*/null;
+
+/* Sample data. It shows the page layout only. The values are not real. */
+const SAMPLE = [
+{
+  sample:true,
+  meta:{project:"sample-project-pre",cluster:"tr1-pre",location:"europe-west2",days:90,alignment_s:300,generated:"2026-10-26T09:00:00Z",live_vm_total:27,
+    history:{first_window:"2026-07-28 09:05 UTC",last_window:"2026-10-26 09:00 UTC",windows:25920,distinct_nodes:214,node_mapping:{live:27,mig:171,heuristic:16},upgrade_windows_excluded:312},
+    autoscaler_log_entries:4381},
+  pools:[
+    {pool:"tenant-shared",shape:"n2-standard-8|cpu=default|gpu=none|lssd=0|STANDARD",live_nodes:13,locations:"europe-west2-a,europe-west2-b,europe-west2-c",autoscaling:true,min_per_zone:3,max_per_zone:10,reservation_affinity:"ANY_RESERVATION",upgrade_strategy:"SURGE",max_surge:1,max_unavailable:0},
+    {pool:"tenant-data",shape:"n2-highmem-16|cpu=Intel Ice Lake|gpu=none|lssd=0|STANDARD",live_nodes:9,locations:"europe-west2-a,europe-west2-b,europe-west2-c",autoscaling:true,min_per_zone:3,max_per_zone:5,reservation_affinity:"SPECIFIC_RESERVATION",upgrade_strategy:"SURGE",max_surge:1,max_unavailable:0},
+    {pool:"batch-spot",shape:"e2-standard-4|cpu=default|gpu=none|lssd=0|SPOT",live_nodes:5,locations:"europe-west2-a,europe-west2-b,europe-west2-c",autoscaling:true,min_per_zone:0,max_per_zone:8,reservation_affinity:"NO_RESERVATION",upgrade_strategy:"SURGE",max_surge:1,max_unavailable:0}
+  ],
+  live:[
+    {pool:"tenant-shared",zone:"europe-west2-a",machine_type:"n2-standard-8",status:"RUNNING",vms:5},
+    {pool:"tenant-shared",zone:"europe-west2-b",machine_type:"n2-standard-8",status:"RUNNING",vms:4},
+    {pool:"tenant-shared",zone:"europe-west2-c",machine_type:"n2-standard-8",status:"RUNNING",vms:4},
+    {pool:"tenant-data",zone:"europe-west2-a",machine_type:"n2-highmem-16",status:"RUNNING",vms:3},
+    {pool:"tenant-data",zone:"europe-west2-b",machine_type:"n2-highmem-16",status:"RUNNING",vms:3},
+    {pool:"tenant-data",zone:"europe-west2-c",machine_type:"n2-highmem-16",status:"RUNNING",vms:3},
+    {pool:"batch-spot",zone:"europe-west2-a",machine_type:"e2-standard-4",status:"RUNNING",vms:2},
+    {pool:"batch-spot",zone:"europe-west2-b",machine_type:"e2-standard-4",status:"RUNNING",vms:1},
+    {pool:"batch-spot",zone:"europe-west2-c",machine_type:"e2-standard-4",status:"RUNNING",vms:2}
+  ],
+  peaks:{
+    pool_zone:[
+      {pool:"tenant-shared",zone:"europe-west2-a",peak:7,peak_time:"2026-09-22 08:40 UTC",peak_excl_upgrades:6,peak_excl_upgrades_time:"2026-09-23 09:10 UTC",p95:6,mean:4.8,min:3},
+      {pool:"tenant-shared",zone:"europe-west2-b",peak:6,peak_time:"2026-09-22 09:05 UTC",peak_excl_upgrades:6,peak_excl_upgrades_time:"2026-09-22 09:05 UTC",p95:5,mean:4.3,min:3},
+      {pool:"tenant-shared",zone:"europe-west2-c",peak:8,peak_time:"2026-10-05 10:15 UTC",peak_excl_upgrades:7,peak_excl_upgrades_time:"2026-09-22 09:20 UTC",p95:6,mean:4.9,min:3},
+      {pool:"tenant-data",zone:"europe-west2-a",peak:4,peak_time:"2026-10-05 10:00 UTC",peak_excl_upgrades:4,peak_excl_upgrades_time:"2026-09-30 17:30 UTC",p95:4,mean:3.2,min:3},
+      {pool:"tenant-data",zone:"europe-west2-b",peak:4,peak_time:"2026-10-05 10:25 UTC",peak_excl_upgrades:3,peak_excl_upgrades_time:"2026-08-01 09:00 UTC",p95:3,mean:3.1,min:3},
+      {pool:"tenant-data",zone:"europe-west2-c",peak:4,peak_time:"2026-10-05 10:50 UTC",peak_excl_upgrades:4,peak_excl_upgrades_time:"2026-09-30 18:00 UTC",p95:4,mean:3.3,min:3},
+      {pool:"batch-spot",zone:"europe-west2-a",peak:6,peak_time:"2026-09-30 23:10 UTC",peak_excl_upgrades:6,peak_excl_upgrades_time:"2026-09-30 23:10 UTC",p95:5,mean:2.4,min:0},
+      {pool:"batch-spot",zone:"europe-west2-b",peak:5,peak_time:"2026-09-30 23:15 UTC",peak_excl_upgrades:5,peak_excl_upgrades_time:"2026-09-30 23:15 UTC",p95:4,mean:2.1,min:0},
+      {pool:"batch-spot",zone:"europe-west2-c",peak:6,peak_time:"2026-09-30 23:20 UTC",peak_excl_upgrades:6,peak_excl_upgrades_time:"2026-09-30 23:20 UTC",p95:5,mean:2.6,min:0}
+    ],
+    cluster:[{scope:"ALL",peak:44,peak_time:"2026-09-30 23:15 UTC",peak_excl_upgrades:42,peak_excl_upgrades_time:"2026-09-30 23:15 UTC",p95:38,mean:31.7,min:25}]
+  },
+  sizing:[
+    {shape:"e2-standard-4|cpu=default|gpu=none|lssd=0|SPOT",zone:"europe-west2-a",pools:"batch-spot",peak_excl_upgrades:6,peak:6,growth_pct:10,surge_headroom:0,sizing_input:"",note:"Spot VMs cannot consume reservations"},
+    {shape:"e2-standard-4|cpu=default|gpu=none|lssd=0|SPOT",zone:"europe-west2-b",pools:"batch-spot",peak_excl_upgrades:5,peak:5,growth_pct:10,surge_headroom:0,sizing_input:"",note:"Spot VMs cannot consume reservations"},
+    {shape:"e2-standard-4|cpu=default|gpu=none|lssd=0|SPOT",zone:"europe-west2-c",pools:"batch-spot",peak_excl_upgrades:6,peak:6,growth_pct:10,surge_headroom:0,sizing_input:"",note:"Spot VMs cannot consume reservations"},
+    {shape:"n2-highmem-16|cpu=Intel Ice Lake|gpu=none|lssd=0|STANDARD",zone:"europe-west2-a",pools:"tenant-data",peak_excl_upgrades:4,peak:4,growth_pct:10,surge_headroom:1,sizing_input:6,note:"specific affinity: history is capped by the current reservation"},
+    {shape:"n2-highmem-16|cpu=Intel Ice Lake|gpu=none|lssd=0|STANDARD",zone:"europe-west2-b",pools:"tenant-data",peak_excl_upgrades:3,peak:4,growth_pct:10,surge_headroom:1,sizing_input:5,note:"specific affinity: history is capped by the current reservation"},
+    {shape:"n2-highmem-16|cpu=Intel Ice Lake|gpu=none|lssd=0|STANDARD",zone:"europe-west2-c",pools:"tenant-data",peak_excl_upgrades:4,peak:4,growth_pct:10,surge_headroom:1,sizing_input:6,note:"specific affinity: history is capped by the current reservation"},
+    {shape:"n2-standard-8|cpu=default|gpu=none|lssd=0|STANDARD",zone:"europe-west2-a",pools:"tenant-shared",peak_excl_upgrades:6,peak:7,growth_pct:10,surge_headroom:0,sizing_input:7,note:""},
+    {shape:"n2-standard-8|cpu=default|gpu=none|lssd=0|STANDARD",zone:"europe-west2-b",pools:"tenant-shared",peak_excl_upgrades:6,peak:6,growth_pct:10,surge_headroom:0,sizing_input:7,note:""},
+    {shape:"n2-standard-8|cpu=default|gpu=none|lssd=0|STANDARD",zone:"europe-west2-c",pools:"tenant-shared",peak_excl_upgrades:7,peak:8,growth_pct:10,surge_headroom:0,sizing_input:8,note:""}
+  ],
+  autoscaler:[
+    {pool:"batch-spot",zone:"europe-west2-a",scale_up_events:41,nodes_requested:118,max_single_request:6,nodes_scaled_down:116,failed_scale_ups:"",no_scale_up_rejections:"",first_event:"2026-07-29 23:00 UTC",last_event:"2026-10-25 23:40 UTC"},
+    {pool:"batch-spot",zone:"europe-west2-b",scale_up_events:38,nodes_requested:97,max_single_request:5,nodes_scaled_down:96,failed_scale_ups:"",no_scale_up_rejections:"no.scale.up.mig.failing.predicate=3",first_event:"2026-07-29 23:00 UTC",last_event:"2026-10-25 23:40 UTC"},
+    {pool:"batch-spot",zone:"europe-west2-c",scale_up_events:40,nodes_requested:121,max_single_request:6,nodes_scaled_down:119,failed_scale_ups:"",no_scale_up_rejections:"",first_event:"2026-07-29 23:00 UTC",last_event:"2026-10-25 23:40 UTC"},
+    {pool:"tenant-data",zone:"europe-west2-b",scale_up_events:2,nodes_requested:2,max_single_request:1,nodes_scaled_down:2,failed_scale_ups:"",no_scale_up_rejections:"",first_event:"2026-08-01 08:55 UTC",last_event:"2026-10-05 10:20 UTC"},
+    {pool:"tenant-shared",zone:"europe-west2-a",scale_up_events:17,nodes_requested:29,max_single_request:3,nodes_scaled_down:27,failed_scale_ups:"",no_scale_up_rejections:"",first_event:"2026-07-30 08:10 UTC",last_event:"2026-10-24 09:05 UTC"},
+    {pool:"tenant-shared",zone:"europe-west2-b",scale_up_events:14,nodes_requested:22,max_single_request:3,nodes_scaled_down:22,failed_scale_ups:"",no_scale_up_rejections:"",first_event:"2026-07-30 08:10 UTC",last_event:"2026-10-24 09:05 UTC"},
+    {pool:"tenant-shared",zone:"europe-west2-c",scale_up_events:19,nodes_requested:35,max_single_request:4,nodes_scaled_down:31,failed_scale_ups:"scale.up.error.out.of.resources=2",no_scale_up_rejections:"",first_event:"2026-07-30 08:10 UTC",last_event:"2026-10-24 09:05 UTC"}
+  ]
+},
+{
+  sample:true,
+  meta:{project:"sample-project-pre",cluster:"tr1-pre-ew1",location:"europe-west1",days:90,alignment_s:300,generated:"2026-10-26T09:20:00Z",live_vm_total:9,
+    history:{first_window:"2026-07-28 09:25 UTC",last_window:"2026-10-26 09:20 UTC",windows:25920,distinct_nodes:61,node_mapping:{live:9,mig:52},upgrade_windows_excluded:288},
+    autoscaler_log_entries:906},
+  pools:[
+    {pool:"tenant-shared",shape:"n2-standard-8|cpu=default|gpu=none|lssd=0|STANDARD",live_nodes:6,locations:"europe-west1-b,europe-west1-c,europe-west1-d",autoscaling:true,min_per_zone:2,max_per_zone:6,reservation_affinity:"ANY_RESERVATION",upgrade_strategy:"SURGE",max_surge:1,max_unavailable:0},
+    {pool:"system",shape:"e2-standard-4|cpu=default|gpu=none|lssd=0|STANDARD",live_nodes:3,locations:"europe-west1-b,europe-west1-c,europe-west1-d",autoscaling:false,min_per_zone:"",max_per_zone:"",reservation_affinity:"ANY_RESERVATION",upgrade_strategy:"SURGE",max_surge:1,max_unavailable:0}
+  ],
+  live:[
+    {pool:"tenant-shared",zone:"europe-west1-b",machine_type:"n2-standard-8",status:"RUNNING",vms:2},
+    {pool:"tenant-shared",zone:"europe-west1-c",machine_type:"n2-standard-8",status:"RUNNING",vms:2},
+    {pool:"tenant-shared",zone:"europe-west1-d",machine_type:"n2-standard-8",status:"RUNNING",vms:2},
+    {pool:"system",zone:"europe-west1-b",machine_type:"e2-standard-4",status:"RUNNING",vms:1},
+    {pool:"system",zone:"europe-west1-c",machine_type:"e2-standard-4",status:"RUNNING",vms:1},
+    {pool:"system",zone:"europe-west1-d",machine_type:"e2-standard-4",status:"RUNNING",vms:1}
+  ],
+  peaks:{
+    pool_zone:[
+      {pool:"system",zone:"europe-west1-b",peak:2,peak_time:"2026-09-14 02:10 UTC",peak_excl_upgrades:1,peak_excl_upgrades_time:"2026-07-28 09:25 UTC",p95:1,mean:1,min:1},
+      {pool:"system",zone:"europe-west1-c",peak:2,peak_time:"2026-09-14 02:30 UTC",peak_excl_upgrades:1,peak_excl_upgrades_time:"2026-07-28 09:25 UTC",p95:1,mean:1,min:1},
+      {pool:"system",zone:"europe-west1-d",peak:2,peak_time:"2026-09-14 02:50 UTC",peak_excl_upgrades:1,peak_excl_upgrades_time:"2026-07-28 09:25 UTC",p95:1,mean:1,min:1},
+      {pool:"tenant-shared",zone:"europe-west1-b",peak:4,peak_time:"2026-09-22 08:30 UTC",peak_excl_upgrades:3,peak_excl_upgrades_time:"2026-09-22 08:30 UTC",p95:3,mean:2.4,min:2},
+      {pool:"tenant-shared",zone:"europe-west1-c",peak:3,peak_time:"2026-09-22 08:45 UTC",peak_excl_upgrades:3,peak_excl_upgrades_time:"2026-09-22 08:45 UTC",p95:3,mean:2.3,min:2},
+      {pool:"tenant-shared",zone:"europe-west1-d",peak:4,peak_time:"2026-09-22 09:00 UTC",peak_excl_upgrades:4,peak_excl_upgrades_time:"2026-09-22 09:00 UTC",p95:3,mean:2.5,min:2}
+    ],
+    cluster:[{scope:"ALL",peak:13,peak_time:"2026-09-22 09:00 UTC",peak_excl_upgrades:13,peak_excl_upgrades_time:"2026-09-22 09:00 UTC",p95:11,mean:10.2,min:9}]
+  },
+  sizing:[
+    {shape:"e2-standard-4|cpu=default|gpu=none|lssd=0|STANDARD",zone:"europe-west1-b",pools:"system",peak_excl_upgrades:1,peak:2,growth_pct:10,surge_headroom:0,sizing_input:2,note:""},
+    {shape:"e2-standard-4|cpu=default|gpu=none|lssd=0|STANDARD",zone:"europe-west1-c",pools:"system",peak_excl_upgrades:1,peak:2,growth_pct:10,surge_headroom:0,sizing_input:2,note:""},
+    {shape:"e2-standard-4|cpu=default|gpu=none|lssd=0|STANDARD",zone:"europe-west1-d",pools:"system",peak_excl_upgrades:1,peak:2,growth_pct:10,surge_headroom:0,sizing_input:2,note:""},
+    {shape:"n2-standard-8|cpu=default|gpu=none|lssd=0|STANDARD",zone:"europe-west1-b",pools:"tenant-shared",peak_excl_upgrades:3,peak:4,growth_pct:10,surge_headroom:0,sizing_input:4,note:""},
+    {shape:"n2-standard-8|cpu=default|gpu=none|lssd=0|STANDARD",zone:"europe-west1-c",pools:"tenant-shared",peak_excl_upgrades:3,peak:3,growth_pct:10,surge_headroom:0,sizing_input:4,note:""},
+    {shape:"n2-standard-8|cpu=default|gpu=none|lssd=0|STANDARD",zone:"europe-west1-d",pools:"tenant-shared",peak_excl_upgrades:4,peak:4,growth_pct:10,surge_headroom:0,sizing_input:5,note:""}
+  ],
+  autoscaler:[
+    {pool:"tenant-shared",zone:"europe-west1-b",scale_up_events:9,nodes_requested:12,max_single_request:2,nodes_scaled_down:12,failed_scale_ups:"",no_scale_up_rejections:"",first_event:"2026-07-30 08:00 UTC",last_event:"2026-10-20 08:40 UTC"},
+    {pool:"tenant-shared",zone:"europe-west1-c",scale_up_events:7,nodes_requested:9,max_single_request:1,nodes_scaled_down:9,failed_scale_ups:"",no_scale_up_rejections:"",first_event:"2026-07-30 08:00 UTC",last_event:"2026-10-20 08:40 UTC"},
+    {pool:"tenant-shared",zone:"europe-west1-d",scale_up_events:10,nodes_requested:14,max_single_request:2,nodes_scaled_down:14,failed_scale_ups:"",no_scale_up_rejections:"",first_event:"2026-07-30 08:00 UTC",last_event:"2026-10-20 08:40 UTC"}
+  ]
+}];
+
+/* Metric guide. Short sentences, active voice (ASD-STE100 style). */
+const DOC = [
+  ["Shape","The machine properties that a reservation must match.","The script joins machine type, min CPU platform, GPUs, Local SSD and Spot flag.","Make one reservation for each shape in each zone."],
+  ["Current","The number of node VMs that run now.","The script lists VMs with the goog-k8s-cluster-name label. It counts RUNNING VMs.","Compare it with the reservation size. The gap is unused reserved capacity."],
+  ["Window","One time slot in the history, 5 minutes by default.","Cloud Monitoring sends one point for each node in each window.","Use shorter windows to catch short peaks. Use longer windows for long ranges."],
+  ["Peak","The highest node count in one window.","The script counts distinct nodes in each window. It keeps the maximum.","Use it to see the worst case. It can include upgrade surge nodes."],
+  ["Peak without upgrades","The highest node count outside node upgrade windows.","The script removes windows that overlap UPGRADE_NODES operations.","Use it as the base for reservation size. Add surge headroom separately."],
+  ["P95","The node count that 95% of windows do not exceed.","The script sorts all window counts. It takes the 95th percentile.","Use it to see normal busy periods. Do not size specific reservations from it."],
+  ["Mean","The average node count over all windows.","The script adds all window counts. It divides by the number of windows.","Use it for cost estimates only. Do not size reservations from it."],
+  ["Min","The lowest node count in one window.","The script keeps the minimum window count.","Use it to check autoscaler minimums. It shows your always-on base."],
+  ["Growth","Extra capacity for expected growth.","You set it with --growth-pct. The script rounds up.","Set it from your demand forecast. Do not use a fixed guess."],
+  ["Surge headroom","Extra VMs for node upgrades.","The script adds maxSurge for pools with specific affinity.","Reserve it, or set maxSurge=0 and maxUnavailable=1."],
+  ["Sizing input","The suggested VM count for one shape in one zone.","Peak without upgrades, times growth, rounded up, plus surge headroom.","Review it before you create the reservation. It is not a final number."],
+  ["Scale-up events","How often the autoscaler added nodes to a pool in a zone.","The script reads scaleUp events from the autoscaler visibility log.","Find pools and zones that scale often. They need the most headroom."],
+  ["Nodes requested","The total number of nodes the autoscaler asked for.","The script adds requestedNodes from each scaleUp event.","Compare it with scale-downs. A big gap shows growth."],
+  ["Max single request","The largest number of nodes asked for in one event.","The script keeps the highest requestedNodes value.","Use it to size buffers for sudden bursts."],
+  ["Failed scale-ups","Scale-ups that did not complete, by error ID.","The script links resultInfo errors to their scaleUp event.","Treat out-of-resources errors as stockouts. Reserve capacity for that zone."],
+  ["No-scale-up rejections","Node groups the autoscaler did not use, by reason.","The script reads rejectedMigs from noScaleUp events.","Check the reason. Fix quota, taints or limits before you reserve."],
+  ["Node mapping","How the script found the pool and zone of each node.","It uses VM labels, then node group names, then a name match.","Check the heuristic and unmapped counts. High counts reduce accuracy."]
+];
+
+let sets = [];
+let tab = "peaks";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const num = v => (v === "" || v === null || v === undefined || isNaN(+v)) ? null : +v;
+const shortShape = s => { if (!s) return "unknown"; const p = s.split("|"); const cpu = (p[1]||"").replace("cpu=",""); return p[0] + (cpu && cpu !== "default" ? " · " + cpu : "") + (s.includes("|SPOT") ? " · Spot" : ""); };
+const zoneTail = z => (z || "").split("-").slice(-1)[0];
+
+function store(k, v){ try { localStorage.setItem(k, v); } catch(e){} }
+function load(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
+
+function labelOf(d){ const m = d.meta || {}; return `${m.project || "?"} / ${m.cluster || "?"} (${m.location || "?"})${d.sample ? " · sample" : ""}`; }
+
+function currentByPoolZone(d){
+  const m = {};
+  (d.live || []).forEach(r => { if (r.status === "RUNNING") { const k = r.pool + "|" + r.zone; m[k] = (m[k] || 0) + (+r.vms || 0); } });
+  return m;
+}
+
+function fillSelect(selectIdx){
+  const sel = $("sel");
+  sel.innerHTML = sets.map((d, i) => `<option value="${i}">${esc(labelOf(d))}</option>`).join("");
+  sel.value = String(selectIdx);
+}
+
+function render(){
+  const d = sets[+$("sel").value] || sets[0];
+  if (!d) return;
+  const m = d.meta || {}, h = m.history || {};
+  $("sampleBanner").hidden = !d.sample;
+  $("title").textContent = `${m.cluster} · ${m.location}`;
+  const mapping = h.node_mapping || {};
+  const mapTotal = Object.values(mapping).reduce((a, b) => a + b, 0);
+  const exact = (mapping.live || 0) + (mapping.mig || 0);
+  const exactPct = mapTotal ? Math.round(100 * exact / mapTotal) : null;
+  $("meta").innerHTML = [
+    ["Project", m.project], ["History", h.first_window ? `${h.first_window} → ${h.last_window}` : `${m.days} days requested`],
+    ["Window", `${m.alignment_s || 300} s`], ["Generated", m.generated],
+    ["Node mapping", exactPct === null ? "n/a" : `${exactPct}% exact`],
+    ["Upgrade windows removed", h.upgrade_windows_excluded ?? "n/a"]
+  ].map(([k, v]) => `<span>${esc(k)}: <b>${esc(v)}</b></span>`).join("");
+
+  const cur = currentByPoolZone(d);
+  const curTotal = Object.values(cur).reduce((a, b) => a + b, 0);
+  const cl = ((d.peaks || {}).cluster || [])[0] || {};
+  const sizeTotal = (d.sizing || []).reduce((a, r) => a + (num(r.sizing_input) || 0), 0);
+  const failed = (d.autoscaler || []).reduce((a, r) => a + (r.failed_scale_ups || "").split(";").filter(Boolean).reduce((x, s) => x + (+(s.split("=")[1]) || 0), 0), 0);
+  $("kpis").innerHTML = [
+    ["Running VMs now", curTotal, ""], ["Cluster peak", cl.peak ?? "–", ""],
+    ["Peak without upgrades", cl.peak_excl_upgrades ?? "–", ""], ["Cluster P95", cl.p95 ?? "–", ""],
+    ["Sum of sizing input", sizeTotal, ""], ["Failed scale-ups", failed, failed ? "bad" : ""]
+  ].map(([l, v, c]) => `<div class="kpi ${c}"><div class="v">${esc(v)}</div><div class="l">${esc(l)}</div></div>`).join("");
+
+  $("flow").innerHTML = flowSvg(d, curTotal, mapTotal);
+  $("usage").innerHTML = usageSvg(d, cur);
+  $("sizing").innerHTML = sizingSvg(d, cur);
+  renderTabs(d, cur);
+  store("gke-report-idx", $("sel").value);
+}
+
+/* ---------- SVG: data flow ---------- */
+function flowSvg(d, curTotal, mapTotal){
+  const m = d.meta || {}, h = m.history || {};
+  const W = 960, H = 400;
+  const box = (x, y, w, hh, cls, t1, t2) =>
+    `<rect x="${x}" y="${y}" width="${w}" height="${hh}" rx="8" class="${cls}"/>` +
+    `<text x="${x + 12}" y="${y + 21}" font-size="13" font-weight="600">${esc(t1)}</text>` +
+    (t2 ? `<text x="${x + 12}" y="${y + 39}" font-size="11.5" class="muted">${esc(t2)}</text>` : "");
+  const arrow = (x1, y1, x2, y2) => {
+    const mx = (x1 + x2) / 2;
+    return `<path class="arrow" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2 - 8},${y2}"/><path class="arrowhead" d="M${x2},${y2} l-9,-4.5 v9 z"/>`;
+  };
+  const src = [
+    ["GKE API", `node pools: ${(d.pools || []).length}`],
+    ["Compute Engine", `node VMs now: ${curTotal}`],
+    ["kubectl (optional)", "node Ready and cordon state"],
+    ["Cloud Monitoring", `windows: ${h.windows ?? "n/a"} · nodes: ${mapTotal || "n/a"}`],
+    ["Autoscaler log", `entries: ${m.autoscaler_log_entries ?? "n/a"}`]
+  ];
+  const steps = [["Step 1 · Live inventory", "pools, VMs, shapes"], ["Step 2 · Historical peaks", "count nodes per window"], ["Step 3 · Autoscaler events", "scale-ups and failures"]];
+  const outs = [["Current vs peak", "per pool and zone"], ["Sizing input", "per shape and zone"], ["Autoscaler activity", "stockout signals"], ["report_data.json", "feeds this page"]];
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Data flow from sources through the script to the outputs">`;
+  s += `<text x="20" y="22" font-size="12" class="muted" font-weight="600">SOURCES (read-only)</text>`;
+  s += `<text x="372" y="22" font-size="12" class="muted" font-weight="600">gke_node_peaks.py</text>`;
+  s += `<text x="716" y="22" font-size="12" class="muted" font-weight="600">OUTPUTS</text>`;
+  src.forEach((b, i) => { s += box(20, 36 + i * 70, 250, 52, "box-src", b[0], b[1]); });
+  s += `<rect x="358" y="36" width="270" height="332" rx="12" class="box-script"/>`;
+  steps.forEach((b, i) => { s += box(374, 62 + i * 102, 238, 56, "box-step", b[0], b[1]); });
+  outs.forEach((b, i) => { s += box(706, 46 + i * 84, 234, 52, "box-out", b[0], b[1]); });
+  const sy = i => 62 + i * 70, ty = i => 90 + i * 102, oy = i => 72 + i * 84;
+  s += arrow(270, sy(0), 374, ty(0)) + arrow(270, sy(1), 374, ty(0)) + arrow(270, sy(2), 374, ty(0));
+  s += arrow(270, sy(3), 374, ty(1)) + arrow(270, sy(4), 374, ty(2));
+  s += arrow(612, ty(0), 706, oy(0)) + arrow(612, ty(1), 706, oy(0)) + arrow(612, ty(1), 706, oy(1)) + arrow(612, ty(2), 706, oy(2)) + arrow(612, ty(2), 706, oy(3));
+  s += `<text x="374" y="${H - 14}" font-size="11" class="muted">Region filter: ${esc(m.location || "")} · history ${esc(m.days || "")} days</text>`;
+  return s + `</svg>`;
+}
+
+function ticks(max){
+  const step = max <= 6 ? 1 : max <= 12 ? 2 : max <= 30 ? 5 : Math.ceil(max / 6 / 5) * 5;
+  const out = []; for (let v = 0; v <= max; v += step) out.push(v); return out;
+}
+
+/* ---------- SVG: current vs peak ---------- */
+function usageSvg(d, cur){
+  const rows = ((d.peaks || {}).pool_zone || []).map(r => ({
+    label: `${r.pool} · ${zoneTail(r.zone)}`, zone: r.zone, pool: r.pool,
+    current: cur[r.pool + "|" + r.zone] || 0, p95: +r.p95 || 0, peak: +r.peak || 0, ex: +r.peak_excl_upgrades || 0, t: r.peak_time
+  })).sort((a, b) => a.pool.localeCompare(b.pool) || a.zone.localeCompare(b.zone));
+  if (!rows.length) return `<p class="sub">No historical data in this report.</p>`;
+  const W = 820, L = 200, R = 130, top = 12, rowH = 30, H = top + rows.length * rowH + 30;
+  const max = Math.max(1, ...rows.map(r => Math.max(r.current, r.peak)));
+  const x = v => L + (W - L - R) * v / max;
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Current, P95 and peak node counts per node pool and zone">`;
+  ticks(max).forEach(t => { s += `<line class="grid" x1="${x(t)}" x2="${x(t)}" y1="${top - 4}" y2="${H - 24}"/><text x="${x(t)}" y="${H - 8}" font-size="11" text-anchor="middle" class="muted">${t}</text>`; });
+  let prevPool = null;
+  rows.forEach((r, i) => {
+    const y = top + i * rowH;
+    if (prevPool !== null && prevPool !== r.pool) s += `<line class="grid" x1="8" x2="${W - 8}" y1="${y - 2}" y2="${y - 2}"/>`;
+    prevPool = r.pool;
+    s += `<g><title>${esc(r.pool)} in ${esc(r.zone)}: current ${r.current}, P95 ${r.p95}, peak ${r.peak} (${esc(r.t || "")}), peak without upgrades ${r.ex}</title>`;
+    s += `<text x="${L - 10}" y="${y + 17}" font-size="12" text-anchor="end">${esc(r.label)}</text>`;
+    s += `<rect x="${L}" y="${y + 4}" width="${Math.max(0, x(r.peak) - L)}" height="18" rx="2" class="peak"/>`;
+    s += `<rect x="${L}" y="${y + 4}" width="${Math.max(0, x(r.p95) - L)}" height="18" rx="2" class="p95"/>`;
+    s += `<rect x="${L}" y="${y + 9}" width="${Math.max(0, x(r.current) - L)}" height="8" rx="2" class="current"/>`;
+    s += `<line class="exmark" x1="${x(r.ex)}" x2="${x(r.ex)}" y1="${y + 1}" y2="${y + 25}"/>`;
+    s += `<text x="${W - R + 10}" y="${y + 17}" font-size="11.5" class="muted">now ${r.current} · p95 ${r.p95} · peak ${r.peak}</text></g>`;
+  });
+  return s + `</svg>`;
+}
+
+/* ---------- SVG: sizing input ---------- */
+function sizingSvg(d, cur){
+  const shapeOf = {}; (d.pools || []).forEach(p => shapeOf[p.pool] = p.shape);
+  const curShape = {};
+  Object.entries(cur).forEach(([k, v]) => { const [pool, zone] = k.split("|"); const key = (shapeOf[pool] || "UNKNOWN") + "|" + zone; curShape[key] = (curShape[key] || 0) + v; });
+  const rows = (d.sizing || []).map(r => {
+    const base = +r.peak_excl_upgrades || +r.peak || 0, g = +r.growth_pct || 0, surge = +r.surge_headroom || 0;
+    const sized = num(r.sizing_input);
+    const grown = sized === null ? base : Math.max(base, sized - surge);
+    return { label: `${shortShape(r.shape)} · ${zoneTail(r.zone)}`, shape: r.shape, zone: r.zone, base, growth: grown - base, surge,
+      sized, reservable: sized !== null, current: curShape[r.shape + "|" + r.zone] || 0, note: r.note || "", pools: r.pools, g };
+  }).sort((a, b) => a.shape.localeCompare(b.shape) || a.zone.localeCompare(b.zone));
+  if (!rows.length) return `<p class="sub">No sizing input in this report.</p>`;
+  const W = 820, L = 250, R = 110, top = 12, rowH = 32, H = top + rows.length * rowH + 30;
+  const max = Math.max(1, ...rows.map(r => Math.max(r.current, r.base + r.growth + r.surge)));
+  const x = v => L + (W - L - R) * v / max;
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Reservation sizing input per machine shape and zone">`;
+  ticks(max).forEach(t => { s += `<line class="grid" x1="${x(t)}" x2="${x(t)}" y1="${top - 4}" y2="${H - 24}"/><text x="${x(t)}" y="${H - 8}" font-size="11" text-anchor="middle" class="muted">${t}</text>`; });
+  rows.forEach((r, i) => {
+    const y = top + i * rowH;
+    s += `<g><title>${esc(r.shape)} in ${esc(r.zone)} (pools: ${esc(r.pools)}). Peak without upgrades ${r.base}, growth ${r.g}% adds ${r.growth}, surge ${r.surge}. Sizing input ${r.sized ?? "not reservable"}. Running now ${r.current}. ${esc(r.note)}</title>`;
+    s += `<text x="${L - 10}" y="${y + 19}" font-size="12" text-anchor="end">${esc(r.label)}</text>`;
+    if (r.reservable) {
+      s += `<rect x="${L}" y="${y + 5}" width="${Math.max(0, x(r.base) - L)}" height="20" class="base"/>`;
+      s += `<rect x="${x(r.base)}" y="${y + 5}" width="${Math.max(0, x(r.base + r.growth) - x(r.base))}" height="20" class="growth"/>`;
+      s += `<rect x="${x(r.base + r.growth)}" y="${y + 5}" width="${Math.max(0, x(r.base + r.growth + r.surge) - x(r.base + r.growth))}" height="20" class="surge"/>`;
+      s += `<text x="${W - R + 10}" y="${y + 19}" font-size="12" font-weight="600">${r.sized} VMs</text>`;
+    } else {
+      s += `<rect x="${L}" y="${y + 5}" width="${Math.max(0, x(r.base) - L)}" height="20" class="notres"/>`;
+      s += `<text x="${W - R + 10}" y="${y + 19}" font-size="11.5" class="muted">not reservable</text>`;
+    }
+    s += `<line class="marker" x1="${x(r.current)}" x2="${x(r.current)}" y1="${y + 1}" y2="${y + 29}"/></g>`;
+  });
+  return s + `</svg>`;
+}
+
+/* ---------- tables ---------- */
+function table(cols, rows){
+  return `<table><thead><tr>${cols.map(c => `<th class="${c.n ? "n" : ""}">${esc(c.h)}</th>`).join("")}</tr></thead><tbody>` +
+    (rows.length ? rows.map(r => `<tr>${cols.map(c => `<td class="${c.n ? "n" : ""}">${c.f ? c.f(r) : esc(r[c.k])}</td>`).join("")}</tr>`).join("")
+                 : `<tr><td colspan="${cols.length}">No data.</td></tr>`) + `</tbody></table>`;
+}
+function renderTabs(d, cur){
+  const tabs = [["peaks", "Peaks by pool and zone"], ["sizing", "Sizing input"], ["autoscaler", "Autoscaler activity"], ["pools", "Node pools"]];
+  $("tabs").innerHTML = tabs.map(([k, l]) => `<button type="button" role="tab" aria-selected="${k === tab}" data-tab="${k}">${esc(l)}</button>`).join("");
+  $("tabs").querySelectorAll("button").forEach(b => b.onclick = () => { tab = b.dataset.tab; renderTabs(d, cur); });
+  let html = "";
+  if (tab === "peaks") {
+    const rows = ((d.peaks || {}).pool_zone || []).map(r => ({...r, current: cur[r.pool + "|" + r.zone] || 0}));
+    html = table([{h:"Pool",k:"pool"},{h:"Zone",k:"zone"},{h:"Current",k:"current",n:1},{h:"P95",k:"p95",n:1},{h:"Peak",k:"peak",n:1},{h:"Peak w/o upgrades",k:"peak_excl_upgrades",n:1},{h:"Mean",k:"mean",n:1},{h:"Min",k:"min",n:1},{h:"Peak time",k:"peak_time"}], rows);
+  } else if (tab === "sizing") {
+    html = table([{h:"Shape",f:r => esc(shortShape(r.shape))},{h:"Zone",k:"zone"},{h:"Pools",k:"pools"},{h:"Peak w/o upgrades",k:"peak_excl_upgrades",n:1},{h:"Growth %",k:"growth_pct",n:1},{h:"Surge",k:"surge_headroom",n:1},{h:"Sizing input",n:1,f:r => num(r.sizing_input) === null ? `<span class="tag warn">not reservable</span>` : `<b>${esc(r.sizing_input)}</b>`},{h:"Note",k:"note"}], d.sizing || []);
+  } else if (tab === "autoscaler") {
+    html = table([{h:"Pool",k:"pool"},{h:"Zone",k:"zone"},{h:"Scale-ups",k:"scale_up_events",n:1},{h:"Nodes requested",k:"nodes_requested",n:1},{h:"Max single",k:"max_single_request",n:1},{h:"Scaled down",k:"nodes_scaled_down",n:1},{h:"Failed scale-ups",f:r => r.failed_scale_ups ? `<span class="tag bad">${esc(r.failed_scale_ups)}</span>` : `<span class="tag ok">none</span>`},{h:"No-scale-up reasons",k:"no_scale_up_rejections"},{h:"Last event",k:"last_event"}], d.autoscaler || []);
+  } else {
+    html = table([{h:"Pool",k:"pool"},{h:"Shape",f:r => esc(shortShape(r.shape))},{h:"Live",k:"live_nodes",n:1},{h:"Min/zone",k:"min_per_zone",n:1},{h:"Max/zone",k:"max_per_zone",n:1},{h:"Affinity",k:"reservation_affinity"},{h:"Strategy",k:"upgrade_strategy"},{h:"maxSurge",k:"max_surge",n:1},{h:"maxUnavailable",k:"max_unavailable",n:1},{h:"Zones",f:r => esc((r.locations || "").split(",").map(zoneTail).join(", "))}], d.pools || []);
+  }
+  $("tableBox").innerHTML = html;
+}
+
+/* ---------- loading and theme ---------- */
+function addSets(list, msg){
+  const valid = list.filter(o => o && o.meta && o.peaks !== undefined);
+  if (!valid.length) { $("status").textContent = "No valid report_data.json content found."; return; }
+  if (sets.every(s => s.sample)) sets = [];
+  valid.forEach(v => {
+    const i = sets.findIndex(s => s.meta.project === v.meta.project && s.meta.cluster === v.meta.cluster && s.meta.location === v.meta.location);
+    if (i >= 0) sets[i] = v; else sets.push(v);
+  });
+  fillSelect(sets.length - 1);
+  $("status").textContent = msg || `${valid.length} report(s) loaded.`;
+  render();
+}
+$("file").addEventListener("change", e => {
+  const files = [...e.target.files]; if (!files.length) return;
+  Promise.all(files.map(f => f.text().then(t => { try { const j = JSON.parse(t); return Array.isArray(j) ? j : [j]; } catch(err) { return []; } })))
+    .then(arr => addSets(arr.flat(), `${files.length} file(s) read.`));
+  e.target.value = "";
+});
+$("loadBtn").addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } });
+$("sel").addEventListener("change", render);
+
+const themes = ["auto", "light", "dark"];
+function applyTheme(t){
+  if (t === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.setAttribute("data-theme", t);
+  $("theme").textContent = "Theme: " + t; store("gke-report-theme", t);
+}
+$("theme").addEventListener("click", () => { const cur = load("gke-report-theme") || "auto"; applyTheme(themes[(themes.indexOf(cur) + 1) % 3]); });
+
+const DOC_HEAD = ["Metric", "What it shows", "How we measure it", "How to use it"];
+$("docRows").innerHTML = DOC.map(r => `<tr>${r.map((c, i) => `<td data-label="${DOC_HEAD[i]}">${esc(c)}</td>`).join("")}</tr>`).join("");
+applyTheme(load("gke-report-theme") || "auto");
+sets = Array.isArray(EMBEDDED) && EMBEDDED.length ? EMBEDDED : SAMPLE;
+const saved = +(load("gke-report-idx") || 0);
+fillSelect(saved < sets.length ? saved : 0);
+render();
+</script>
+</body>
+</html>
