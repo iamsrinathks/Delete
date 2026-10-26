@@ -7,8 +7,8 @@
 <style>
 :root{
   --bg:#f6f6f3;--surface:#ffffff;--surface-2:#f0efea;--text:#1c1c1a;--muted:#5e5d57;--border:#e0dfd8;
-  --accent:#0e6b6b;--current:#0e6b6b;--p95:#86b9b8;--peak:#d3e6e5;--marker:#1c1c1a;
-  --base:#3a6ea5;--growth:#9dbbdc;--surge:#c2410c;--grid:#e8e7e1;
+  --accent:#0e6b6b;--current:#1d63c9;--p95:#efb04f;--peak:#f7dcae;--marker:#1d63c9;--peakmark:#8a4f00;
+  --base:#e39a2d;--growth:#2e9b65;--surge:#7c4dd6;--grid:#e8e7e1;
   --warn-bg:#fff3e0;--warn:#8a4500;--bad-bg:#fde8e7;--bad:#a52019;--ok-bg:#e5f4e7;--ok:#1d6b34;
   --flow-src:#eef4fb;--flow-step:#e9f3f2;--flow-out:#fbf1e9;
   color-scheme:light;
@@ -16,8 +16,8 @@
 @media (prefers-color-scheme:dark){
   :root:not([data-theme="light"]){
     --bg:#131312;--surface:#1c1c1a;--surface-2:#252522;--text:#ecebe5;--muted:#a3a29a;--border:#34342f;
-    --accent:#5cc2c1;--current:#6fd0cf;--p95:#2f7978;--peak:#21403f;--marker:#ecebe5;
-    --base:#6b9fd8;--growth:#36577d;--surge:#f28b4f;--grid:#2c2c28;
+    --accent:#5cc2c1;--current:#6ea8ff;--p95:#b9822f;--peak:#4b3a1f;--marker:#6ea8ff;--peakmark:#f3c47a;
+    --base:#d8963a;--growth:#45c08a;--surge:#a888f5;--grid:#2c2c28;
     --warn-bg:#3a2a12;--warn:#f2b66d;--bad-bg:#3d1a18;--bad:#f59b94;--ok-bg:#17301e;--ok:#8fd6a2;
     --flow-src:#1d2a38;--flow-step:#1b302f;--flow-out:#33261c;
     color-scheme:dark;
@@ -25,8 +25,8 @@
 }
 :root[data-theme="dark"]{
   --bg:#131312;--surface:#1c1c1a;--surface-2:#252522;--text:#ecebe5;--muted:#a3a29a;--border:#34342f;
-  --accent:#5cc2c1;--current:#6fd0cf;--p95:#2f7978;--peak:#21403f;--marker:#ecebe5;
-  --base:#6b9fd8;--growth:#36577d;--surge:#f28b4f;--grid:#2c2c28;
+  --accent:#5cc2c1;--current:#6ea8ff;--p95:#b9822f;--peak:#4b3a1f;--marker:#6ea8ff;--peakmark:#f3c47a;
+  --base:#d8963a;--growth:#45c08a;--surge:#a888f5;--grid:#2c2c28;
   --warn-bg:#3a2a12;--warn:#f2b66d;--bad-bg:#3d1a18;--bad:#f59b94;--ok-bg:#17301e;--ok:#8fd6a2;
   --flow-src:#1d2a38;--flow-step:#1b302f;--flow-out:#33261c;
   color-scheme:dark;
@@ -70,8 +70,9 @@ svg .muted{fill:var(--muted)}
 svg .grid{stroke:var(--grid);stroke-width:1}
 svg .peak{fill:var(--peak)} svg .p95{fill:var(--p95)} svg .current{fill:var(--current)}
 svg .base{fill:var(--base)} svg .growth{fill:var(--growth)} svg .surge{fill:var(--surge)}
-svg .marker{stroke:var(--marker);stroke-width:2.5}
-svg .exmark{stroke:var(--surge);stroke-width:2;stroke-dasharray:3 2}
+svg .marker{stroke:var(--marker);stroke-width:3.5;stroke-linecap:round}
+svg .exmark{stroke:var(--peakmark);stroke-width:2;stroke-dasharray:3 2}
+svg .t-cur{fill:var(--current);font-weight:600} svg .t-peak{fill:var(--peakmark);font-weight:600} svg .t-rec{fill:var(--growth);font-weight:700}
 svg .box-src{fill:var(--flow-src);stroke:var(--border)}
 svg .box-step{fill:var(--flow-step);stroke:var(--border)}
 svg .box-out{fill:var(--flow-out);stroke:var(--border)}
@@ -99,7 +100,35 @@ pre{background:var(--surface-2);border-radius:8px;padding:12px;overflow-x:auto;f
 .tabs button{min-height:32px;padding:4px 12px;font-size:.85rem}
 .tabs button[aria-selected="true"]{background:var(--accent);color:var(--surface);border-color:var(--accent)}
 footer{color:var(--muted);font-size:.8rem;margin-top:24px}
+[hidden]{display:none!important}
 #tableBox table{min-width:680px}
+#recBox table{min-width:1180px}
+#resBox table,#quotaBox table{min-width:980px}
+#resBox td:nth-child(-n+3),#resBox td:nth-child(6),#resBox td:nth-child(7){white-space:nowrap}
+td.up{color:var(--growth);font-weight:700} td.down{color:var(--bad);font-weight:700} td.zero{color:var(--muted)}
+.ubar{display:inline-block;width:70px;height:8px;border-radius:4px;background:var(--grid);vertical-align:middle;margin-right:6px;overflow:hidden}
+.ubar i{display:block;height:100%;background:var(--current)}
+#recBox td:nth-child(-n+3){white-space:nowrap}
+#recBox td:last-child{min-width:240px}
+.sizectl{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:end;margin:4px 0 8px}
+.sizectl label{display:flex;flex-direction:column;font-size:.8rem;color:var(--muted);gap:4px}
+.sizectl label.chk{flex-direction:row;align-items:center;gap:8px;min-height:38px;color:var(--text);font-size:.88rem}
+.sizectl select{min-width:0}
+.sizectl input[type=number]{font:inherit;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:7px 10px;width:96px;min-height:38px}
+.formula{font-size:.88rem;color:var(--muted);margin:0 0 10px}
+.formula b{color:var(--text)}
+tr.sub td{font-weight:600;background:var(--surface-2)}
+tr.grand td{font-weight:700;border-top:2px solid var(--text)}
+td.calc{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.82rem;white-space:nowrap}
+td.rec{font-size:1rem;font-weight:700;color:var(--growth)}
+td.c-cur{color:var(--current);font-weight:600} td.c-peak{color:var(--peakmark);font-weight:600}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle}
+.filters{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:end}
+.filters label{display:flex;flex-direction:column;font-size:.8rem;color:var(--muted);gap:4px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.chips .lbl{font-size:.8rem;color:var(--muted);margin-right:4px;flex-basis:100%}
+.chip{min-height:34px;padding:4px 12px;border-radius:999px;font-size:.86rem}
+.chip[aria-pressed="true"]{background:var(--text);color:var(--surface);border-color:var(--text)}
 @media (max-width:600px){h1{font-size:1.3rem}.card{padding:14px}select{min-width:0;width:100%}.controls label{flex:1 1 100%}}
 @media (max-width:720px){
   .doc table thead{display:none}
@@ -138,6 +167,17 @@ footer{color:var(--muted);font-size:.8rem;margin-top:24px}
     <div class="meta" id="meta"></div>
   </section>
 
+  <section class="card" aria-label="Filter by machine type">
+    <div class="filters">
+      <div class="chips" id="catChips" role="group" aria-label="Machine category"></div>
+      <label>Machine type
+        <select id="mtype" aria-label="Machine type"></select>
+      </label>
+      <button type="button" id="resetFilter">Show all</button>
+    </div>
+    <p class="sub" id="filterNote" style="margin:8px 0 0"></p>
+  </section>
+
   <div class="kpis" id="kpis"></div>
 
   <section class="card">
@@ -151,24 +191,59 @@ footer{color:var(--muted);font-size:.8rem;margin-top:24px}
     <p class="sub">Each row is one node pool in one zone. Compare today's nodes with the historical P95 and peak.</p>
     <div class="scroll"><div style="min-width:560px" id="usage"></div></div>
     <div class="legend">
-      <span><i class="sw" style="background:var(--current)"></i>Current (running VMs)</span>
-      <span><i class="sw" style="background:var(--p95)"></i>P95</span>
-      <span><i class="sw" style="background:var(--peak)"></i>Peak</span>
-      <span><i class="sw line" style="background:var(--surge)"></i>Peak without upgrade windows</span>
+      <span><i class="sw" style="background:var(--current)"></i>Current node count (running VMs)</span>
+      <span><i class="sw" style="background:var(--p95)"></i>P95 node count</span>
+      <span><i class="sw" style="background:var(--peak)"></i>Peak node count</span>
+      <span><i class="sw line" style="background:var(--peakmark)"></i>Peak without upgrade windows</span>
     </div>
   </section>
 
   <section class="card">
-    <h2>Reservation sizing input by machine shape and zone</h2>
-    <p class="sub">Reservations match one machine shape in one zone. The bar shows peak, growth and surge headroom.</p>
+    <h2>Recommended reservations by machine type and zone</h2>
+    <p class="sub">Reservations match one machine shape in one zone. Pick a headroom %. The page multiplies the peak and rounds up.</p>
+    <div class="sizectl" role="group" aria-label="Sizing settings">
+      <label>Headroom
+        <select id="pct">
+          <option value="0">0%</option><option value="5">5%</option><option value="10">10%</option>
+          <option value="15">15%</option><option value="20">20%</option><option value="25">25%</option>
+          <option value="30">30%</option><option value="custom">Custom…</option>
+        </select>
+      </label>
+      <label id="customWrap" hidden>Custom %
+        <input type="number" id="pctCustom" min="0" max="300" step="1" value="12" inputmode="numeric">
+      </label>
+      <label>Base
+        <select id="basis">
+          <option value="peak">Peak (max node count)</option>
+          <option value="ex">Peak without upgrade windows</option>
+        </select>
+      </label>
+      <label class="chk"><input type="checkbox" id="surgeChk"> Add upgrade surge (maxSurge per pool)</label>
+      <button type="button" id="csvBtn">Download CSV</button>
+    </div>
+    <p class="formula" id="formulaLine"></p>
     <div class="scroll"><div style="min-width:560px" id="sizing"></div></div>
     <div class="legend">
-      <span><i class="sw" style="background:var(--base)"></i>Peak without upgrade windows</span>
-      <span><i class="sw" style="background:var(--growth)"></i>Growth</span>
-      <span><i class="sw" style="background:var(--surge)"></i>Surge headroom</span>
-      <span><i class="sw line" style="background:var(--marker)"></i>Current running VMs</span>
+      <span><i class="sw" style="background:var(--base)"></i>Peak node count (base)</span>
+      <span><i class="sw" style="background:var(--growth)"></i>Headroom % (rounded up)</span>
+      <span><i class="sw" style="background:var(--surge)"></i>Upgrade surge</span>
+      <span><i class="sw line" style="background:var(--current)"></i>Current node count</span>
       <span><i class="sw" style="background:var(--grid)"></i>Not reservable (Spot or unmapped)</span>
     </div>
+    <h3>Recommendation table</h3>
+    <div class="scroll" id="recBox"></div>
+  </section>
+
+  <section class="card">
+    <h2>Existing reservations</h2>
+    <p class="sub">These reservations exist in the region now. You pay for idle slots. A reservation with no matching pool serves no node.</p>
+    <div class="scroll" id="resBox"></div>
+  </section>
+
+  <section class="card">
+    <h2>Quota check for the recommended plan</h2>
+    <p class="sub" id="quotaSub">A reservation uses regional quota when you create it. This table shows if the plan fits in the current quota.</p>
+    <div class="scroll" id="quotaBox"></div>
   </section>
 
   <section class="card">
@@ -194,7 +269,7 @@ footer{color:var(--muted);font-size:.8rem;margin-top:24px}
       <div>
         <h3>Read the charts</h3>
         <ul>
-          <li>Start with the sizing chart. It shows one bar for each reservation you need.</li>
+          <li>Select a headroom %. The table shows the calculation for each machine type.</li>
           <li>Compare the black line with the bar. The gap is your unused reserved capacity.</li>
           <li>Check the usage chart for zones that peak higher than other zones.</li>
           <li>Check the autoscaler table for failed scale-ups. They show real stockouts.</li>
@@ -240,16 +315,19 @@ const SAMPLE = [
     autoscaler_log_entries:4381},
   pools:[
     {pool:"tenant-shared",shape:"n2-standard-8|cpu=default|gpu=none|lssd=0|STANDARD",live_nodes:13,locations:"europe-west2-a,europe-west2-b,europe-west2-c",autoscaling:true,min_per_zone:3,max_per_zone:10,reservation_affinity:"ANY_RESERVATION",upgrade_strategy:"SURGE",max_surge:1,max_unavailable:0},
-    {pool:"tenant-data",shape:"n2-highmem-16|cpu=Intel Ice Lake|gpu=none|lssd=0|STANDARD",live_nodes:9,locations:"europe-west2-a,europe-west2-b,europe-west2-c",autoscaling:true,min_per_zone:3,max_per_zone:5,reservation_affinity:"SPECIFIC_RESERVATION",upgrade_strategy:"SURGE",max_surge:1,max_unavailable:0},
+    {pool:"tenant-data",shape:"n2d-custom-32-90112|cpu=default|gpu=none|lssd=0|STANDARD",live_nodes:9,locations:"europe-west2-a,europe-west2-b,europe-west2-c",autoscaling:true,min_per_zone:3,max_per_zone:5,reservation_affinity:"SPECIFIC_RESERVATION",upgrade_strategy:"SURGE",max_surge:1,max_unavailable:0},
+    {pool:"gpu-l4",shape:"g2-standard-24|cpu=default|gpu=nvidia-l4x2|lssd=0|STANDARD",live_nodes:3,locations:"europe-west2-b,europe-west2-c",autoscaling:true,min_per_zone:1,max_per_zone:4,reservation_affinity:"SPECIFIC_RESERVATION",upgrade_strategy:"SURGE",max_surge:0,max_unavailable:1},
     {pool:"batch-spot",shape:"e2-standard-4|cpu=default|gpu=none|lssd=0|SPOT",live_nodes:5,locations:"europe-west2-a,europe-west2-b,europe-west2-c",autoscaling:true,min_per_zone:0,max_per_zone:8,reservation_affinity:"NO_RESERVATION",upgrade_strategy:"SURGE",max_surge:1,max_unavailable:0}
   ],
   live:[
     {pool:"tenant-shared",zone:"europe-west2-a",machine_type:"n2-standard-8",status:"RUNNING",vms:5},
     {pool:"tenant-shared",zone:"europe-west2-b",machine_type:"n2-standard-8",status:"RUNNING",vms:4},
     {pool:"tenant-shared",zone:"europe-west2-c",machine_type:"n2-standard-8",status:"RUNNING",vms:4},
-    {pool:"tenant-data",zone:"europe-west2-a",machine_type:"n2-highmem-16",status:"RUNNING",vms:3},
-    {pool:"tenant-data",zone:"europe-west2-b",machine_type:"n2-highmem-16",status:"RUNNING",vms:3},
-    {pool:"tenant-data",zone:"europe-west2-c",machine_type:"n2-highmem-16",status:"RUNNING",vms:3},
+    {pool:"tenant-data",zone:"europe-west2-a",machine_type:"n2d-custom-32-90112",status:"RUNNING",vms:3},
+    {pool:"tenant-data",zone:"europe-west2-b",machine_type:"n2d-custom-32-90112",status:"RUNNING",vms:3},
+    {pool:"tenant-data",zone:"europe-west2-c",machine_type:"n2d-custom-32-90112",status:"RUNNING",vms:3},
+    {pool:"gpu-l4",zone:"europe-west2-b",machine_type:"g2-standard-24",status:"RUNNING",vms:1},
+    {pool:"gpu-l4",zone:"europe-west2-c",machine_type:"g2-standard-24",status:"RUNNING",vms:2},
     {pool:"batch-spot",zone:"europe-west2-a",machine_type:"e2-standard-4",status:"RUNNING",vms:2},
     {pool:"batch-spot",zone:"europe-west2-b",machine_type:"e2-standard-4",status:"RUNNING",vms:1},
     {pool:"batch-spot",zone:"europe-west2-c",machine_type:"e2-standard-4",status:"RUNNING",vms:2}
@@ -262,6 +340,8 @@ const SAMPLE = [
       {pool:"tenant-data",zone:"europe-west2-a",peak:4,peak_time:"2026-10-05 10:00 UTC",peak_excl_upgrades:4,peak_excl_upgrades_time:"2026-09-30 17:30 UTC",p95:4,mean:3.2,min:3},
       {pool:"tenant-data",zone:"europe-west2-b",peak:4,peak_time:"2026-10-05 10:25 UTC",peak_excl_upgrades:3,peak_excl_upgrades_time:"2026-08-01 09:00 UTC",p95:3,mean:3.1,min:3},
       {pool:"tenant-data",zone:"europe-west2-c",peak:4,peak_time:"2026-10-05 10:50 UTC",peak_excl_upgrades:4,peak_excl_upgrades_time:"2026-09-30 18:00 UTC",p95:4,mean:3.3,min:3},
+      {pool:"gpu-l4",zone:"europe-west2-b",peak:2,peak_time:"2026-10-12 14:00 UTC",peak_excl_upgrades:2,peak_excl_upgrades_time:"2026-10-12 14:00 UTC",p95:2,mean:1.3,min:1},
+      {pool:"gpu-l4",zone:"europe-west2-c",peak:4,peak_time:"2026-10-12 14:05 UTC",peak_excl_upgrades:4,peak_excl_upgrades_time:"2026-10-12 14:05 UTC",p95:3,mean:2.2,min:1},
       {pool:"batch-spot",zone:"europe-west2-a",peak:6,peak_time:"2026-09-30 23:10 UTC",peak_excl_upgrades:6,peak_excl_upgrades_time:"2026-09-30 23:10 UTC",p95:5,mean:2.4,min:0},
       {pool:"batch-spot",zone:"europe-west2-b",peak:5,peak_time:"2026-09-30 23:15 UTC",peak_excl_upgrades:5,peak_excl_upgrades_time:"2026-09-30 23:15 UTC",p95:4,mean:2.1,min:0},
       {pool:"batch-spot",zone:"europe-west2-c",peak:6,peak_time:"2026-09-30 23:20 UTC",peak_excl_upgrades:6,peak_excl_upgrades_time:"2026-09-30 23:20 UTC",p95:5,mean:2.6,min:0}
@@ -272,13 +352,30 @@ const SAMPLE = [
     {shape:"e2-standard-4|cpu=default|gpu=none|lssd=0|SPOT",zone:"europe-west2-a",pools:"batch-spot",peak_excl_upgrades:6,peak:6,growth_pct:10,surge_headroom:0,sizing_input:"",note:"Spot VMs cannot consume reservations"},
     {shape:"e2-standard-4|cpu=default|gpu=none|lssd=0|SPOT",zone:"europe-west2-b",pools:"batch-spot",peak_excl_upgrades:5,peak:5,growth_pct:10,surge_headroom:0,sizing_input:"",note:"Spot VMs cannot consume reservations"},
     {shape:"e2-standard-4|cpu=default|gpu=none|lssd=0|SPOT",zone:"europe-west2-c",pools:"batch-spot",peak_excl_upgrades:6,peak:6,growth_pct:10,surge_headroom:0,sizing_input:"",note:"Spot VMs cannot consume reservations"},
-    {shape:"n2-highmem-16|cpu=Intel Ice Lake|gpu=none|lssd=0|STANDARD",zone:"europe-west2-a",pools:"tenant-data",peak_excl_upgrades:4,peak:4,growth_pct:10,surge_headroom:1,sizing_input:6,note:"specific affinity: history is capped by the current reservation"},
-    {shape:"n2-highmem-16|cpu=Intel Ice Lake|gpu=none|lssd=0|STANDARD",zone:"europe-west2-b",pools:"tenant-data",peak_excl_upgrades:3,peak:4,growth_pct:10,surge_headroom:1,sizing_input:5,note:"specific affinity: history is capped by the current reservation"},
-    {shape:"n2-highmem-16|cpu=Intel Ice Lake|gpu=none|lssd=0|STANDARD",zone:"europe-west2-c",pools:"tenant-data",peak_excl_upgrades:4,peak:4,growth_pct:10,surge_headroom:1,sizing_input:6,note:"specific affinity: history is capped by the current reservation"},
+    {shape:"g2-standard-24|cpu=default|gpu=nvidia-l4x2|lssd=0|STANDARD",zone:"europe-west2-b",pools:"gpu-l4",peak_excl_upgrades:2,peak:2,growth_pct:10,surge_headroom:0,sizing_input:3,note:"specific affinity: history is capped by the current reservation"},
+    {shape:"g2-standard-24|cpu=default|gpu=nvidia-l4x2|lssd=0|STANDARD",zone:"europe-west2-c",pools:"gpu-l4",peak_excl_upgrades:4,peak:4,growth_pct:10,surge_headroom:0,sizing_input:5,note:"specific affinity: history is capped by the current reservation"},
+    {shape:"n2d-custom-32-90112|cpu=default|gpu=none|lssd=0|STANDARD",zone:"europe-west2-a",pools:"tenant-data",peak_excl_upgrades:4,peak:4,growth_pct:10,surge_headroom:1,sizing_input:6,note:"specific affinity: history is capped by the current reservation"},
+    {shape:"n2d-custom-32-90112|cpu=default|gpu=none|lssd=0|STANDARD",zone:"europe-west2-b",pools:"tenant-data",peak_excl_upgrades:3,peak:4,growth_pct:10,surge_headroom:1,sizing_input:5,note:"specific affinity: history is capped by the current reservation"},
+    {shape:"n2d-custom-32-90112|cpu=default|gpu=none|lssd=0|STANDARD",zone:"europe-west2-c",pools:"tenant-data",peak_excl_upgrades:4,peak:4,growth_pct:10,surge_headroom:1,sizing_input:6,note:"specific affinity: history is capped by the current reservation"},
     {shape:"n2-standard-8|cpu=default|gpu=none|lssd=0|STANDARD",zone:"europe-west2-a",pools:"tenant-shared",peak_excl_upgrades:6,peak:7,growth_pct:10,surge_headroom:0,sizing_input:7,note:""},
     {shape:"n2-standard-8|cpu=default|gpu=none|lssd=0|STANDARD",zone:"europe-west2-b",pools:"tenant-shared",peak_excl_upgrades:6,peak:6,growth_pct:10,surge_headroom:0,sizing_input:7,note:""},
     {shape:"n2-standard-8|cpu=default|gpu=none|lssd=0|STANDARD",zone:"europe-west2-c",pools:"tenant-shared",peak_excl_upgrades:7,peak:8,growth_pct:10,surge_headroom:0,sizing_input:8,note:""}
   ],
+  reservations:[
+    {name:"res-n2-std8-a",zone:"europe-west2-a",status:"READY",machine_type:"n2-standard-8",min_cpu_platform:"",accelerators:"",local_ssd_count:0,count:6,in_use:5,idle:1,specific_required:false,share_type:"LOCAL",matched_pools:"tenant-shared",key:"n2-standard-8|||0"},
+    {name:"res-n2-std8-c",zone:"europe-west2-c",status:"READY",machine_type:"n2-standard-8",min_cpu_platform:"",accelerators:"",local_ssd_count:0,count:6,in_use:4,idle:2,specific_required:false,share_type:"LOCAL",matched_pools:"tenant-shared",key:"n2-standard-8|||0"},
+    {name:"res-n2d-c32-88g-a",zone:"europe-west2-a",status:"READY",machine_type:"n2d-custom-32-90112",min_cpu_platform:"",accelerators:"",local_ssd_count:0,count:4,in_use:3,idle:1,specific_required:false,share_type:"LOCAL",matched_pools:"tenant-data",key:"n2d-custom-32-90112|||0"},
+    {name:"res-old-highmem",zone:"europe-west2-a",status:"READY",machine_type:"n2-highmem-16",min_cpu_platform:"",accelerators:"",local_ssd_count:0,count:2,in_use:0,idle:2,specific_required:false,share_type:"LOCAL",matched_pools:"",key:"n2-highmem-16|||0"}
+  ],
+  quotas:[
+    {metric:"N2_CPUS",limit:200,usage:144,available:56},
+    {metric:"N2D_CPUS",limit:3000,usage:320,available:2680},
+    {metric:"NVIDIA_L4_GPUS",limit:8,usage:6,available:2},
+    {metric:"INSTANCES",limit:24000,usage:30,available:23970},
+    {metric:"RESERVATIONS",limit:2000,usage:4,available:1996},
+    {metric:"CPUS",limit:5000,usage:0,available:5000}
+  ],
+  machine_specs:{"n2-standard-8":{vcpus:8,memory_gib:32},"n2d-custom-32-90112":{vcpus:32,memory_gib:88},"g2-standard-24":{vcpus:24,memory_gib:96},"e2-standard-4":{vcpus:4,memory_gib:16}},
   autoscaler:[
     {pool:"batch-spot",zone:"europe-west2-a",scale_up_events:41,nodes_requested:118,max_single_request:6,nodes_scaled_down:116,failed_scale_ups:"",no_scale_up_rejections:"",first_event:"2026-07-29 23:00 UTC",last_event:"2026-10-25 23:40 UTC"},
     {pool:"batch-spot",zone:"europe-west2-b",scale_up_events:38,nodes_requested:97,max_single_request:5,nodes_scaled_down:96,failed_scale_ups:"",no_scale_up_rejections:"no.scale.up.mig.failing.predicate=3",first_event:"2026-07-29 23:00 UTC",last_event:"2026-10-25 23:40 UTC"},
@@ -334,6 +431,7 @@ const SAMPLE = [
 
 /* Metric guide. Short sentences, active voice (ASD-STE100 style). */
 const DOC = [
+  ["Machine category","The group of a machine shape: CPU predefined, CPU custom or GPU.","The page reads the shape. GPU means the shape has accelerators. Custom means the type name has -custom-.","Use it to plan GPU and CPU reservations separately."],
   ["Shape","The machine properties that a reservation must match.","The script joins machine type, min CPU platform, GPUs, Local SSD and Spot flag.","Make one reservation for each shape in each zone."],
   ["Current","The number of node VMs that run now.","The script lists VMs with the goog-k8s-cluster-name label. It counts RUNNING VMs.","Compare it with the reservation size. The gap is unused reserved capacity."],
   ["Window","One time slot in the history, 5 minutes by default.","Cloud Monitoring sends one point for each node in each window.","Use shorter windows to catch short peaks. Use longer windows for long ranges."],
@@ -342,9 +440,14 @@ const DOC = [
   ["P95","The node count that 95% of windows do not exceed.","The script sorts all window counts. It takes the 95th percentile.","Use it to see normal busy periods. Do not size specific reservations from it."],
   ["Mean","The average node count over all windows.","The script adds all window counts. It divides by the number of windows.","Use it for cost estimates only. Do not size reservations from it."],
   ["Min","The lowest node count in one window.","The script keeps the minimum window count.","Use it to check autoscaler minimums. It shows your always-on base."],
-  ["Growth","Extra capacity for expected growth.","You set it with --growth-pct. The script rounds up.","Set it from your demand forecast. Do not use a fixed guess."],
-  ["Surge headroom","Extra VMs for node upgrades.","The script adds maxSurge for pools with specific affinity.","Reserve it, or set maxSurge=0 and maxUnavailable=1."],
-  ["Sizing input","The suggested VM count for one shape in one zone.","Peak without upgrades, times growth, rounded up, plus surge headroom.","Review it before you create the reservation. It is not a final number."],
+  ["Headroom %","Extra capacity on top of the peak.","You select it on this page. The page multiplies the base by 1 plus the percentage.","Set it from your demand forecast. Use 10, 15 or 20 percent as a start."],
+  ["Base","The peak value that the calculation starts from.","You select Peak or Peak without upgrade windows.","Use Peak for safety. Use the other value with the surge option."],
+  ["Upgrade surge","Extra VMs for node upgrades.","The page adds maxSurge of each pool when you select the option.","Select it for specific reservations. Or set maxSurge=0 and maxUnavailable=1."],
+  ["Recommended VMs","The suggested reservation size for one shape in one zone.","The page multiplies the base by the headroom. It rounds up and adds surge if selected.","Review it before you create the reservation. It is not a final number."],
+  ["Reserved now (in use)","The VMs that existing reservations hold, and how many run on them.","The script reads reservations in the region. It matches shape and zone.","Compare it with the recommendation. Idle slots cost money."],
+  ["Change","The VMs to add or remove to reach the plan.","The page subtracts reserved VMs from recommended VMs.","Plus means create or resize up. Minus means you can shrink."],
+  ["Quota check","The quota that the plan needs in the region.","The page multiplies extra VMs by vCPUs and GPUs per VM. It compares the result with the limit.","Request more quota before you create reservations that do not fit."],
+  ["vCPU","The virtual CPUs that the recommended VMs hold.","The script reads guestCpus for each machine type.","Use it for quota and cost discussions."],
   ["Scale-up events","How often the autoscaler added nodes to a pool in a zone.","The script reads scaleUp events from the autoscaler visibility log.","Find pools and zones that scale often. They need the most headroom."],
   ["Nodes requested","The total number of nodes the autoscaler asked for.","The script adds requestedNodes from each scaleUp event.","Compare it with scale-downs. A big gap shows growth."],
   ["Max single request","The largest number of nodes asked for in one event.","The script keeps the highest requestedNodes value.","Use it to size buffers for sudden bursts."],
@@ -378,6 +481,48 @@ function fillSelect(selectIdx){
   sel.value = String(selectIdx);
 }
 
+/* ---------- machine filter: CPU (predefined), Custom, GPU ---------- */
+const CATS = [["cpu", "CPU – predefined"], ["custom", "CPU – custom"], ["gpu", "GPU"]];
+const catOf = shape => {
+  if (!shape || shape === "UNKNOWN") return "other";
+  const p = shape.split("|");
+  if ((p[2] || "gpu=none") !== "gpu=none") return "gpu";
+  return /-custom-/.test(p[0]) ? "custom" : "cpu";
+};
+let filt = { cats: new Set(["cpu", "custom", "gpu"]), mtype: "all" };
+(function(){ try { const v = JSON.parse(load("gke-report-filter") || "null"); if (v) { filt.cats = new Set(v.cats); filt.mtype = v.mtype || "all"; } } catch(e) {} })();
+const allCats = () => filt.cats.size === CATS.length;
+const passes = shape => (catOf(shape) === "other" ? allCats() : filt.cats.has(catOf(shape))) &&
+                        (filt.mtype === "all" || (shape || "").split("|")[0] === filt.mtype);
+function saveFilter(){ store("gke-report-filter", JSON.stringify({ cats: [...filt.cats], mtype: filt.mtype })); }
+function shortPool(name, all){
+  /* Drop the prefix that every pool shares, e.g. ew2-msv-int-caas01-svp01-knp01- */
+  if (!all || all.length < 2) return name;
+  let pre = all.reduce((a, b) => { let i = 0; while (i < a.length && a[i] === b[i]) i++; return a.slice(0, i); });
+  pre = pre.slice(0, pre.lastIndexOf("-") + 1);
+  return pre && name.startsWith(pre) && name.length > pre.length ? name.slice(pre.length) : name;
+}
+function renderFilters(d){
+  const shapes = (d.pools || []).map(p => p.shape);
+  const count = c => shapes.filter(s => catOf(s) === c).length;
+  $("catChips").innerHTML = `<span class="lbl">Machine category (node pools)</span>` + CATS.map(([k, l]) =>
+    `<button type="button" class="chip" data-cat="${k}" aria-pressed="${filt.cats.has(k)}">${esc(l)} (${count(k)})</button>`).join("");
+  $("catChips").querySelectorAll(".chip").forEach(b => b.onclick = () => {
+    const k = b.dataset.cat;
+    if (filt.cats.has(k)) { if (filt.cats.size > 1) filt.cats.delete(k); } else filt.cats.add(k);
+    filt.mtype = "all"; saveFilter(); render();
+  });
+  const types = [...new Set(shapes.filter(s => filt.cats.has(catOf(s))).map(s => s.split("|")[0]))].sort();
+  if (filt.mtype !== "all" && !types.includes(filt.mtype)) filt.mtype = "all";
+  $("mtype").innerHTML = `<option value="all">All machine types (${types.length})</option>` + types.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join("");
+  $("mtype").value = filt.mtype;
+  const shown = (d.pools || []).filter(p => passes(p.shape)).length;
+  $("filterNote").textContent = (allCats() && filt.mtype === "all") ? `Showing all ${shapes.length} node pools.`
+    : `Showing ${shown} of ${shapes.length} node pools. Charts, tables, totals and the CSV use this filter.`;
+}
+$("mtype").addEventListener("change", () => { filt.mtype = $("mtype").value; saveFilter(); render(); });
+$("resetFilter").addEventListener("click", () => { filt = { cats: new Set(CATS.map(c => c[0])), mtype: "all" }; saveFilter(); render(); });
+
 function render(){
   const d = sets[+$("sel").value] || sets[0];
   if (!d) return;
@@ -395,20 +540,39 @@ function render(){
     ["Upgrade windows removed", h.upgrade_windows_excluded ?? "n/a"]
   ].map(([k, v]) => `<span>${esc(k)}: <b>${esc(v)}</b></span>`).join("");
 
+  renderFilters(d);
   const cur = currentByPoolZone(d);
   const curTotal = Object.values(cur).reduce((a, b) => a + b, 0);
+  const poolShape = {}; (d.pools || []).forEach(p => poolShape[p.pool] = p.shape);
+  const curFiltered = Object.entries(cur).reduce((a, [k, v]) => a + (passes(poolShape[k.split("|")[0]]) ? v : 0), 0);
+  const filtered = !(allCats() && filt.mtype === "all");
   const cl = ((d.peaks || {}).cluster || [])[0] || {};
-  const sizeTotal = (d.sizing || []).reduce((a, r) => a + (num(r.sizing_input) || 0), 0);
+  const rec = computeSizing(d, cur);
+  const sizeTotal = rec.reduce((a, r) => a + (r.rec || 0), 0);
+  const resNow = rec.reduce((a, r) => a + (r.reservable ? r.reserved : 0), 0);
+  const resUse = rec.reduce((a, r) => a + (r.reservable ? r.inUse : 0), 0);
+  const idleNow = (d.reservations || []).filter(r => passes(`${r.machine_type}|cpu=${r.min_cpu_platform || "default"}|gpu=${r.accelerators || "none"}|lssd=${r.local_ssd_count || 0}|STANDARD`)).reduce((a, r) => a + (+r.idle || 0), 0);
+  const st = sizingSettings();
+  $("formulaLine").innerHTML = `Recommended VMs = <b>ceil(${st.basis === "peak" ? "peak" : "peak without upgrades"} × ${(1 + st.pct / 100).toFixed(2)})</b>${st.surge ? " <b>+ maxSurge</b>" : ""} for each machine shape in each zone. Window: last ${esc(m.days)} days.`;
   const failed = (d.autoscaler || []).reduce((a, r) => a + (r.failed_scale_ups || "").split(";").filter(Boolean).reduce((x, s) => x + (+(s.split("=")[1]) || 0), 0), 0);
   $("kpis").innerHTML = [
-    ["Running VMs now", curTotal, ""], ["Cluster peak", cl.peak ?? "–", ""],
-    ["Peak without upgrades", cl.peak_excl_upgrades ?? "–", ""], ["Cluster P95", cl.p95 ?? "–", ""],
-    ["Sum of sizing input", sizeTotal, ""], ["Failed scale-ups", failed, failed ? "bad" : ""]
+    [filtered ? "Running VMs now (filtered)" : "Running VMs now", curFiltered, ""], ["Cluster peak (all pools)", cl.peak ?? "–", ""],
+    ["Peak without upgrades (all pools)", cl.peak_excl_upgrades ?? "–", ""], ["Cluster P95 (all pools)", cl.p95 ?? "–", ""],
+    [`Recommended VMs (+${st.pct}%)${filtered ? " · filtered" : ""}`, sizeTotal, ""],
+    [`Reserved now (in use)${filtered ? " · filtered" : ""}`, `${resNow} (${resUse})`, ""],
+    ["Change to reach plan", (sizeTotal - resNow > 0 ? "+" : "") + (sizeTotal - resNow), ""],
+    ["Idle reserved VMs", idleNow, idleNow ? "bad" : ""],
+    ["Failed scale-ups", failed, failed ? "bad" : ""]
   ].map(([l, v, c]) => `<div class="kpi ${c}"><div class="v">${esc(v)}</div><div class="l">${esc(l)}</div></div>`).join("");
 
   $("flow").innerHTML = flowSvg(d, curTotal, mapTotal);
   $("usage").innerHTML = usageSvg(d, cur);
-  $("sizing").innerHTML = sizingSvg(d, cur);
+  $("sizing").innerHTML = sizingSvg(rec);
+  poolNames = (d.pools || []).map(p => p.pool);
+  $("recBox").innerHTML = recTable(rec);
+  $("resBox").innerHTML = resTable(d);
+  $("quotaBox").innerHTML = quotaTable(d, rec);
+  lastRec = { rows: rec, d };
   renderTabs(d, cur);
   store("gke-report-idx", $("sel").value);
 }
@@ -457,12 +621,14 @@ function ticks(max){
 
 /* ---------- SVG: current vs peak ---------- */
 function usageSvg(d, cur){
-  const rows = ((d.peaks || {}).pool_zone || []).map(r => ({
-    label: `${r.pool} · ${zoneTail(r.zone)}`, zone: r.zone, pool: r.pool,
+  const shapeOf = {}; (d.pools || []).forEach(p => shapeOf[p.pool] = p.shape);
+  const names = (d.pools || []).map(p => p.pool);
+  const rows = ((d.peaks || {}).pool_zone || []).filter(r => passes(shapeOf[r.pool] || "UNKNOWN")).map(r => ({
+    label: `${shortPool(r.pool, names)} · ${zoneTail(r.zone)}`, zone: r.zone, pool: r.pool,
     current: cur[r.pool + "|" + r.zone] || 0, p95: +r.p95 || 0, peak: +r.peak || 0, ex: +r.peak_excl_upgrades || 0, t: r.peak_time
   })).sort((a, b) => a.pool.localeCompare(b.pool) || a.zone.localeCompare(b.zone));
-  if (!rows.length) return `<p class="sub">No historical data in this report.</p>`;
-  const W = 820, L = 200, R = 130, top = 12, rowH = 30, H = top + rows.length * rowH + 30;
+  if (!rows.length) return `<p class="sub">No node pools match this filter, or the report has no history.</p>`;
+  const W = 840, L = 200, R = 160, top = 12, rowH = 30, H = top + rows.length * rowH + 30;
   const max = Math.max(1, ...rows.map(r => Math.max(r.current, r.peak)));
   const x = v => L + (W - L - R) * v / max;
   let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Current, P95 and peak node counts per node pool and zone">`;
@@ -478,38 +644,83 @@ function usageSvg(d, cur){
     s += `<rect x="${L}" y="${y + 4}" width="${Math.max(0, x(r.p95) - L)}" height="18" rx="2" class="p95"/>`;
     s += `<rect x="${L}" y="${y + 9}" width="${Math.max(0, x(r.current) - L)}" height="8" rx="2" class="current"/>`;
     s += `<line class="exmark" x1="${x(r.ex)}" x2="${x(r.ex)}" y1="${y + 1}" y2="${y + 25}"/>`;
-    s += `<text x="${W - R + 10}" y="${y + 17}" font-size="11.5" class="muted">now ${r.current} · p95 ${r.p95} · peak ${r.peak}</text></g>`;
+    s += `<text x="${W - R + 10}" y="${y + 17}" font-size="11.5"><tspan class="t-cur">now ${r.current}</tspan><tspan class="muted"> · p95 ${r.p95} · </tspan><tspan class="t-peak">peak ${r.peak}</tspan></text></g>`;
   });
   return s + `</svg>`;
 }
 
-/* ---------- SVG: sizing input ---------- */
-function sizingSvg(d, cur){
+/* ---------- sizing: headroom % chosen on the page ---------- */
+const ceilSafe = x => Math.ceil(Math.round(x * 1e6) / 1e6);   /* 10 x 1.1 must give 11, not 12 */
+function sizingSettings(){
+  const sel = $("pct").value;
+  let pct = sel === "custom" ? +$("pctCustom").value : +sel;
+  if (!isFinite(pct) || pct < 0) pct = 0;
+  return { pct, basis: $("basis").value, surge: $("surgeChk").checked };
+}
+function keyOfShape(shape){
+  const p = (shape || "").split("|"); if (p.length < 5) return "";
+  const cpu = p[1].replace(/^cpu=/, ""), gpu = p[2].replace(/^gpu=/, ""), lssd = p[3].replace(/^lssd=/, "").split("/")[0];
+  return [p[0], (cpu === "default" || cpu === "Automatic") ? "" : cpu, gpu === "none" ? "" : gpu, +lssd || 0].join("|");
+}
+function gpuOfShape(shape){
+  const g = ((shape || "").split("|")[2] || "").replace(/^gpu=/, "");
+  if (!g || g === "none") return [];
+  return g.split(",").map(x => { const i = x.lastIndexOf("x"); return { type: x.slice(0, i), count: +x.slice(i + 1) || 0 }; });
+}
+function existingFor(d, shape, zone){
+  const k = keyOfShape(shape);
+  const hits = (d.reservations || []).filter(r => r.zone === zone && (r.key || "") === k);
+  return { reserved: hits.reduce((a, r) => a + (+r.count || 0), 0), inUse: hits.reduce((a, r) => a + (+r.in_use || 0), 0),
+           names: hits.map(r => r.name).join(", "), specific: hits.some(r => r.specific_required) };
+}
+function computeSizing(d, cur){
+  const st = sizingSettings();
+  const poolBy = {}; (d.pools || []).forEach(p => poolBy[p.pool] = p);
   const shapeOf = {}; (d.pools || []).forEach(p => shapeOf[p.pool] = p.shape);
   const curShape = {};
   Object.entries(cur).forEach(([k, v]) => { const [pool, zone] = k.split("|"); const key = (shapeOf[pool] || "UNKNOWN") + "|" + zone; curShape[key] = (curShape[key] || 0) + v; });
-  const rows = (d.sizing || []).map(r => {
-    const base = +r.peak_excl_upgrades || +r.peak || 0, g = +r.growth_pct || 0, surge = +r.surge_headroom || 0;
-    const sized = num(r.sizing_input);
-    const grown = sized === null ? base : Math.max(base, sized - surge);
-    return { label: `${shortShape(r.shape)} · ${zoneTail(r.zone)}`, shape: r.shape, zone: r.zone, base, growth: grown - base, surge,
-      sized, reservable: sized !== null, current: curShape[r.shape + "|" + r.zone] || 0, note: r.note || "", pools: r.pools, g };
+  const f = 1 + st.pct / 100;
+  return (d.sizing || []).filter(r => passes(r.shape)).map(r => {
+    const base = st.basis === "peak" ? (+r.peak || 0) : (+r.peak_excl_upgrades || +r.peak || 0);
+    const reservable = !(r.shape || "").includes("|SPOT") && r.shape !== "UNKNOWN" && !!r.shape;
+    const raw = base * f, up = ceilSafe(raw);
+    const pools = (r.pools || "").split(",").filter(Boolean);
+    const surge = (st.surge && reservable) ? pools.reduce((a, p) => a + (+((poolBy[p] || {}).max_surge) || 0), 0) : 0;
+    const rec = reservable ? up + surge : null;
+    const calc = `${base} × ${f.toFixed(2)} = ${(Math.round(raw * 100) / 100).toFixed(2)} → ${up}` + (surge ? ` + ${surge} surge = ${up + surge}` : "");
+    const ex = existingFor(d, r.shape, r.zone);
+    const reserved = r.existing_reserved !== undefined ? +r.existing_reserved : ex.reserved;
+    const inUse = r.existing_in_use !== undefined ? +r.existing_in_use : ex.inUse;
+    const mtype = (r.shape || "unknown").split("|")[0];
+    const spec = (d.machine_specs || {})[mtype] || null;
+    const current = curShape[r.shape + "|" + r.zone] || 0;
+    /* Quota already used here = reserved slots + running VMs outside the reservation. */
+    const extraQuotaVMs = reservable ? Math.max(0, rec - (reserved + Math.max(0, current - inUse))) : 0;
+    return { shape: r.shape, mtype, label: `${shortShape(r.shape)} · ${zoneTail(r.zone)}`,
+      reserved, inUse, resNames: r.existing_names || ex.names, change: reservable ? rec - reserved : null,
+      vcpus: spec ? spec.vcpus : null, memGib: spec ? spec.memory_gib : null, gpus: gpuOfShape(r.shape), extraQuotaVMs,
+      zone: r.zone, pools: r.pools || "", base, peak: +r.peak || 0, ex: +r.peak_excl_upgrades || 0, pct: st.pct,
+      headroom: up - base, surge, rec, reservable, calc, current, note: r.note || "" };
   }).sort((a, b) => a.shape.localeCompare(b.shape) || a.zone.localeCompare(b.zone));
-  if (!rows.length) return `<p class="sub">No sizing input in this report.</p>`;
+}
+
+/* ---------- SVG: sizing ---------- */
+function sizingSvg(rows){
+  if (!rows.length) return `<p class="sub">No machine shapes match this filter, or the report has no sizing data.</p>`;
   const W = 820, L = 250, R = 110, top = 12, rowH = 32, H = top + rows.length * rowH + 30;
-  const max = Math.max(1, ...rows.map(r => Math.max(r.current, r.base + r.growth + r.surge)));
+  const max = Math.max(1, ...rows.map(r => Math.max(r.current, r.base + Math.max(0, r.headroom) + r.surge)));
   const x = v => L + (W - L - R) * v / max;
-  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Reservation sizing input per machine shape and zone">`;
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Recommended reservation size per machine shape and zone">`;
   ticks(max).forEach(t => { s += `<line class="grid" x1="${x(t)}" x2="${x(t)}" y1="${top - 4}" y2="${H - 24}"/><text x="${x(t)}" y="${H - 8}" font-size="11" text-anchor="middle" class="muted">${t}</text>`; });
   rows.forEach((r, i) => {
-    const y = top + i * rowH;
-    s += `<g><title>${esc(r.shape)} in ${esc(r.zone)} (pools: ${esc(r.pools)}). Peak without upgrades ${r.base}, growth ${r.g}% adds ${r.growth}, surge ${r.surge}. Sizing input ${r.sized ?? "not reservable"}. Running now ${r.current}. ${esc(r.note)}</title>`;
+    const y = top + i * rowH, h = Math.max(0, r.headroom);
+    s += `<g><title>${esc(r.shape)} in ${esc(r.zone)} (pools: ${esc(r.pools)}). ${esc(r.calc)}. Recommended ${r.rec ?? "not reservable"}. Running now ${r.current}. ${esc(r.note)}</title>`;
     s += `<text x="${L - 10}" y="${y + 19}" font-size="12" text-anchor="end">${esc(r.label)}</text>`;
     if (r.reservable) {
       s += `<rect x="${L}" y="${y + 5}" width="${Math.max(0, x(r.base) - L)}" height="20" class="base"/>`;
-      s += `<rect x="${x(r.base)}" y="${y + 5}" width="${Math.max(0, x(r.base + r.growth) - x(r.base))}" height="20" class="growth"/>`;
-      s += `<rect x="${x(r.base + r.growth)}" y="${y + 5}" width="${Math.max(0, x(r.base + r.growth + r.surge) - x(r.base + r.growth))}" height="20" class="surge"/>`;
-      s += `<text x="${W - R + 10}" y="${y + 19}" font-size="12" font-weight="600">${r.sized} VMs</text>`;
+      s += `<rect x="${x(r.base)}" y="${y + 5}" width="${Math.max(0, x(r.base + h) - x(r.base))}" height="20" class="growth"/>`;
+      s += `<rect x="${x(r.base + h)}" y="${y + 5}" width="${Math.max(0, x(r.base + h + r.surge) - x(r.base + h))}" height="20" class="surge"/>`;
+      s += `<text x="${W - R + 10}" y="${y + 19}" font-size="12" class="t-rec">${r.rec} VMs</text>`;
     } else {
       s += `<rect x="${L}" y="${y + 5}" width="${Math.max(0, x(r.base) - L)}" height="20" class="notres"/>`;
       s += `<text x="${W - R + 10}" y="${y + 19}" font-size="11.5" class="muted">not reservable</text>`;
@@ -519,6 +730,90 @@ function sizingSvg(d, cur){
   return s + `</svg>`;
 }
 
+/* ---------- recommendation table with totals per machine type ---------- */
+let poolNames = [];
+function recTable(rows){
+  if (!rows.length) return "";
+  const head = `<thead><tr><th>Machine type / shape</th><th>Zone</th><th>Pools</th><th class="n"><i class="dot" style="background:var(--base)"></i>Peak</th><th class="n">Peak w/o upgrades</th><th>Calculation</th><th class="n"><i class="dot" style="background:var(--growth)"></i>Recommended VMs</th><th class="n"><i class="dot" style="background:var(--current)"></i>Running now</th><th class="n">Reserved now (in use)</th><th class="n">Change</th><th class="n">vCPU (recommended)</th><th>Note</th></tr></thead>`;
+  let body = "", grand = 0, grandNow = 0, grandRes = 0, grandUse = 0, grandCpu = 0, last = null, sub = 0, subNow = 0, subN = 0, subRes = 0, subUse = 0, subCpu = 0;
+  const chg = (c) => c === null ? `<td class="n zero">—</td>` : c > 0 ? `<td class="n up">+${c}</td>` : c < 0 ? `<td class="n down">${c}</td>` : `<td class="n zero">0</td>`;
+  const flush = () => { if (last !== null && subN > 1) body += `<tr class="sub"><td colspan="6">${esc(shortShape(last))} — total across zones</td><td class="n rec">${sub}</td><td class="n c-cur">${subNow}</td><td class="n">${subRes} (${subUse})</td>${chg(sub - subRes)}<td class="n">${subCpu || ""}</td><td></td></tr>`; };
+  rows.forEach(r => {
+    if (r.shape !== last) { flush(); last = r.shape; sub = 0; subNow = 0; subN = 0; subRes = 0; subUse = 0; subCpu = 0; }
+    subN++; subNow += r.current; grandNow += r.current;
+    subRes += r.reserved; subUse += r.inUse; grandRes += r.reserved; grandUse += r.inUse;
+    const cpu = r.reservable && r.vcpus ? r.rec * r.vcpus : 0;
+    if (r.reservable) { sub += r.rec; grand += r.rec; subCpu += cpu; grandCpu += cpu; }
+    body += `<tr><td>${esc(shortShape(r.shape))}</td><td>${esc(r.zone)}</td><td>${esc(r.pools.split(",").map(p => shortPool(p, poolNames)).join(", "))}</td>` +
+      `<td class="n c-peak">${r.peak}</td><td class="n">${r.ex}</td>` +
+      `<td class="calc">${r.reservable ? esc(r.calc) : "—"}</td>` +
+      `<td class="n rec">${r.reservable ? r.rec : `<span class="tag warn">not reservable</span>`}</td>` +
+      `<td class="n c-cur">${r.current}</td>` +
+      `<td class="n" title="${esc(r.resNames)}">${r.reserved ? `${r.reserved} (${r.inUse})` : `<span class="zero">none</span>`}</td>` +
+      chg(r.change) +
+      `<td class="n" title="${r.vcpus ? `${r.vcpus} vCPU, ${r.memGib} GiB per VM` : "machine spec not collected"}">${cpu || (r.reservable ? "?" : "")}</td>` +
+      `<td>${esc(r.note)}</td></tr>`;
+  });
+  flush();
+  body += `<tr class="grand"><td colspan="6">${(allCats() && filt.mtype === "all") ? "All reservable shapes" : "Filtered reservable shapes"} — total</td><td class="n rec">${grand}</td><td class="n c-cur">${grandNow}</td><td class="n">${grandRes} (${grandUse})</td>${chg(grand - grandRes)}<td class="n">${grandCpu || ""}</td><td></td></tr>`;
+  return `<table>${head}<tbody>${body}</tbody></table>`;
+}
+
+function resTable(d){
+  const list = (d.reservations || []).map(r => {
+    const shape = `${r.machine_type}|cpu=${r.min_cpu_platform || "default"}|gpu=${r.accelerators || "none"}|lssd=${r.local_ssd_count || 0}|STANDARD`;
+    return { ...r, shape };
+  }).filter(r => passes(r.shape)).sort((a, b) => a.machine_type.localeCompare(b.machine_type) || a.zone.localeCompare(b.zone));
+  if (!(d.reservations || []).length) return `<p class="sub">No reservation data in this report. Run the script without --skip-capacity.</p>`;
+  if (!list.length) return `<p class="sub">No reservations match this filter.</p>`;
+  const names = (d.pools || []).map(p => p.pool);
+  let tot = 0, use = 0, idle = 0;
+  const rows = list.map(r => {
+    tot += +r.count || 0; use += +r.in_use || 0; idle += +r.idle || 0;
+    const pct = r.count ? Math.round(100 * r.in_use / r.count) : 0;
+    const pools = (r.matched_pools || "").split(",").filter(Boolean).map(p => shortPool(p, names)).join(", ");
+    return `<tr><td>${esc(r.name)}</td><td>${esc(r.zone)}</td><td>${esc(shortShape(r.shape))}</td>` +
+      `<td class="n">${r.count}</td><td class="n c-cur">${r.in_use}</td>` +
+      `<td class="n">${r.idle ? `<span class="tag warn">${r.idle} idle</span>` : "0"}</td>` +
+      `<td><span class="ubar"><i style="width:${pct}%"></i></span>${pct}%</td>` +
+      `<td>${r.specific_required ? `<span class="tag warn">specific</span>` : "automatic"}</td>` +
+      `<td>${esc(r.share_type || "")}</td>` +
+      `<td>${pools ? esc(pools) : `<span class="tag bad">no matching pool</span>`}</td><td>${esc(r.status)}</td></tr>`;
+  }).join("");
+  return `<table><thead><tr><th>Name</th><th>Zone</th><th>Shape</th><th class="n">Reserved</th><th class="n"><i class="dot" style="background:var(--current)"></i>In use</th><th class="n">Idle</th><th>Utilisation</th><th>Consumption</th><th>Share</th><th>Pools it can serve</th><th>Status</th></tr></thead><tbody>${rows}` +
+    `<tr class="grand"><td colspan="3">Total</td><td class="n">${tot}</td><td class="n c-cur">${use}</td><td class="n">${idle}</td><td colspan="5"></td></tr></tbody></table>`;
+}
+
+function quotaTable(d, rows){
+  const qs = {}; (d.quotas || []).forEach(q => qs[q.metric] = q);
+  if (!(d.quotas || []).length) return `<p class="sub">No quota data in this report. Run the script without --skip-capacity.</p>`;
+  const need = {}, add = (m, v, label) => { if (!need[m]) need[m] = { v: 0, label }; need[m].v += v; };
+  let missingSpec = 0;
+  rows.filter(r => r.reservable).forEach(r => {
+    const fam = r.mtype.split("-")[0].toUpperCase();
+    if (r.vcpus) add(`${fam}_CPUS`, r.extraQuotaVMs * r.vcpus, `${fam} vCPUs`); else if (r.extraQuotaVMs) missingSpec++;
+    r.gpus.forEach(g => add(`NVIDIA_${g.type.replace(/^nvidia-/, "").toUpperCase().replace(/-/g, "_")}_GPUS`, r.extraQuotaVMs * g.count, `${g.type} GPUs`));
+    add("INSTANCES", r.extraQuotaVMs, "VM instances");
+    if (!r.reserved && r.rec > 0) add("RESERVATIONS", 1, "reservation objects");
+  });
+  const body = Object.entries(need).sort().map(([m, n]) => {
+    const q = qs[m];
+    if (!q) return `<tr><td>${esc(m)}</td><td>${esc(n.label)}</td><td class="n" colspan="3"><span class="tag warn">metric not in regional quota list</span></td><td class="n up">+${n.v}</td><td colspan="2">Check the Quotas page for this family.</td></tr>`;
+    const after = q.usage + n.v, ok = after <= q.limit;
+    return `<tr><td>${esc(m)}</td><td>${esc(n.label)}</td><td class="n">${q.limit}</td><td class="n">${q.usage}</td><td class="n">${q.available}</td><td class="n ${n.v ? "up" : "zero"}">+${n.v}</td><td class="n">${after} / ${q.limit}</td>` +
+      `<td>${ok ? `<span class="tag ok">fits</span>` : `<span class="tag bad">short by ${after - q.limit}</span>`}</td></tr>`;
+  }).join("");
+  $("quotaSub").textContent = `A reservation uses regional quota when you create it. "Extra" counts only VMs that the plan adds above today's reserved and running VMs.` + (missingSpec ? ` ${missingSpec} row(s) have no machine spec, so their vCPUs are missing.` : "");
+  return `<table><thead><tr><th>Quota metric</th><th>Covers</th><th class="n">Limit</th><th class="n">Usage now</th><th class="n">Available</th><th class="n">Extra for plan</th><th class="n">After plan</th><th>Result</th></tr></thead><tbody>${body || `<tr><td colspan="8">The plan needs no extra quota.</td></tr>`}</tbody></table>`;
+}
+
+function csvOf(rows, d){
+  const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const lines = [["project","cluster","location","category","machine_type","shape","zone","pools","peak","peak_excl_upgrades","base_used","headroom_pct","calculation","upgrade_surge","recommended_vms","running_now","reserved_now","reserved_in_use","change","vcpu_per_vm","vcpu_recommended","existing_reservations","note"].join(",")];
+  rows.forEach(r => lines.push([d.meta.project, d.meta.cluster, d.meta.location, catOf(r.shape), r.mtype, r.shape, r.zone, r.pools, r.peak, r.ex, r.base, r.pct, r.reservable ? r.calc : "", r.surge, r.rec ?? "not reservable", r.current, r.reserved, r.inUse, r.change ?? "", r.vcpus ?? "", (r.rec && r.vcpus) ? r.rec * r.vcpus : "", r.resNames, r.note].map(q).join(",")));
+  return lines.join("\n");
+}
+
 /* ---------- tables ---------- */
 function table(cols, rows){
   return `<table><thead><tr>${cols.map(c => `<th class="${c.n ? "n" : ""}">${esc(c.h)}</th>`).join("")}</tr></thead><tbody>` +
@@ -526,19 +821,18 @@ function table(cols, rows){
                  : `<tr><td colspan="${cols.length}">No data.</td></tr>`) + `</tbody></table>`;
 }
 function renderTabs(d, cur){
-  const tabs = [["peaks", "Peaks by pool and zone"], ["sizing", "Sizing input"], ["autoscaler", "Autoscaler activity"], ["pools", "Node pools"]];
+  const tabs = [["peaks", "Peaks by pool and zone"], ["autoscaler", "Autoscaler activity"], ["pools", "Node pools"]];
   $("tabs").innerHTML = tabs.map(([k, l]) => `<button type="button" role="tab" aria-selected="${k === tab}" data-tab="${k}">${esc(l)}</button>`).join("");
   $("tabs").querySelectorAll("button").forEach(b => b.onclick = () => { tab = b.dataset.tab; renderTabs(d, cur); });
   let html = "";
   if (tab === "peaks") {
-    const rows = ((d.peaks || {}).pool_zone || []).map(r => ({...r, current: cur[r.pool + "|" + r.zone] || 0}));
+    const shp = {}; (d.pools || []).forEach(p => shp[p.pool] = p.shape);
+    const rows = ((d.peaks || {}).pool_zone || []).filter(r => passes(shp[r.pool] || "UNKNOWN")).map(r => ({...r, current: cur[r.pool + "|" + r.zone] || 0}));
     html = table([{h:"Pool",k:"pool"},{h:"Zone",k:"zone"},{h:"Current",k:"current",n:1},{h:"P95",k:"p95",n:1},{h:"Peak",k:"peak",n:1},{h:"Peak w/o upgrades",k:"peak_excl_upgrades",n:1},{h:"Mean",k:"mean",n:1},{h:"Min",k:"min",n:1},{h:"Peak time",k:"peak_time"}], rows);
-  } else if (tab === "sizing") {
-    html = table([{h:"Shape",f:r => esc(shortShape(r.shape))},{h:"Zone",k:"zone"},{h:"Pools",k:"pools"},{h:"Peak w/o upgrades",k:"peak_excl_upgrades",n:1},{h:"Growth %",k:"growth_pct",n:1},{h:"Surge",k:"surge_headroom",n:1},{h:"Sizing input",n:1,f:r => num(r.sizing_input) === null ? `<span class="tag warn">not reservable</span>` : `<b>${esc(r.sizing_input)}</b>`},{h:"Note",k:"note"}], d.sizing || []);
   } else if (tab === "autoscaler") {
     html = table([{h:"Pool",k:"pool"},{h:"Zone",k:"zone"},{h:"Scale-ups",k:"scale_up_events",n:1},{h:"Nodes requested",k:"nodes_requested",n:1},{h:"Max single",k:"max_single_request",n:1},{h:"Scaled down",k:"nodes_scaled_down",n:1},{h:"Failed scale-ups",f:r => r.failed_scale_ups ? `<span class="tag bad">${esc(r.failed_scale_ups)}</span>` : `<span class="tag ok">none</span>`},{h:"No-scale-up reasons",k:"no_scale_up_rejections"},{h:"Last event",k:"last_event"}], d.autoscaler || []);
   } else {
-    html = table([{h:"Pool",k:"pool"},{h:"Shape",f:r => esc(shortShape(r.shape))},{h:"Live",k:"live_nodes",n:1},{h:"Min/zone",k:"min_per_zone",n:1},{h:"Max/zone",k:"max_per_zone",n:1},{h:"Affinity",k:"reservation_affinity"},{h:"Strategy",k:"upgrade_strategy"},{h:"maxSurge",k:"max_surge",n:1},{h:"maxUnavailable",k:"max_unavailable",n:1},{h:"Zones",f:r => esc((r.locations || "").split(",").map(zoneTail).join(", "))}], d.pools || []);
+    html = table([{h:"Pool",k:"pool"},{h:"Shape",f:r => esc(shortShape(r.shape))},{h:"Live",k:"live_nodes",n:1},{h:"Min/zone",k:"min_per_zone",n:1},{h:"Max/zone",k:"max_per_zone",n:1},{h:"Affinity",k:"reservation_affinity"},{h:"Strategy",k:"upgrade_strategy"},{h:"maxSurge",k:"max_surge",n:1},{h:"maxUnavailable",k:"max_unavailable",n:1},{h:"Zones",f:r => esc((r.locations || "").split(",").map(zoneTail).join(", "))}], (d.pools || []).filter(p => passes(p.shape)));
   }
   $("tableBox").innerHTML = html;
 }
@@ -564,6 +858,28 @@ $("file").addEventListener("change", e => {
 });
 $("loadBtn").addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } });
 $("sel").addEventListener("change", render);
+let lastRec = null;
+function saveSizing(){ store("gke-report-sizing", JSON.stringify({ pct: $("pct").value, custom: $("pctCustom").value, basis: $("basis").value, surge: $("surgeChk").checked })); }
+(function loadSizing(){
+  let v = null; try { v = JSON.parse(load("gke-report-sizing") || "null"); } catch(e) {}
+  $("pct").value = (v && v.pct) || "10";
+  if (v && v.custom) $("pctCustom").value = v.custom;
+  if (v && v.basis) $("basis").value = v.basis;
+  $("surgeChk").checked = !!(v && v.surge);
+  $("customWrap").hidden = $("pct").value !== "custom";
+})();
+["pct", "pctCustom", "basis", "surgeChk"].forEach(id => $(id).addEventListener(id === "pctCustom" ? "input" : "change", () => {
+  $("customWrap").hidden = $("pct").value !== "custom"; saveSizing(); render();
+}));
+$("csvBtn").addEventListener("click", () => {
+  if (!lastRec) return;
+  const blob = new Blob([csvOf(lastRec.rows, lastRec.d)], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `reservations-${lastRec.d.meta.cluster}-${sizingSettings().pct}pct.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
 
 const themes = ["auto", "light", "dark"];
 function applyTheme(t){
