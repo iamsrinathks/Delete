@@ -1,36 +1,94 @@
-Most of Procedure A is now settled. One result is still missing: the **server-window hash for CR-04**.
+**CR-04 passes.** The echo server logged two different hashes:
+- **22:42 (Session OFF): `6edbf1466d5e`**, the **real** token.
+- **00:17 (Session ON): `c6cdfcd131a7`**, a **placeholder**. It's a fresh one because you restarted the session.
 
-**Results in Session ON**
+So a token the agent sends to a non-GitHub host is **only the placeholder**. ✅
 
-| Test | Result | Verdict |
-| --- | --- | --- |
-| **CR-03** token visible | Placeholder `59a4ff611ec5` (len 49), not the real `6edbf1466d5e` (len 40). `git credential` is EMPTY | ✅ **Pass** |
-| **CR-02** gh works | Login shown, and private `sbx-cred-test` visible | ✅ **Pass**: the proxy swaps in a token that works |
-| **CR-04** token sent to another host | `ECHO-OK`. **Need the server-window line** | 🔍 Pending |
-| **CR-11** credential files | `.npmrc` and `gh hosts.yml` → **Access is denied** (both readable in OFF) | ✅ **Pass** |
-| **CR-01** git push | **403 SAML SSO**: "re-authorize the OAuth Application 'GitHub Copilot CLI'" | 🔴 **Fail (finding)** |
+## Procedure B: copy and paste
 
-**🔴 Finding: gh and git get different tokens from the proxy**
-- **`gh repo view` reached the private org repo**, but **`git push` to the same repo got 403 SSO**.
-- So the proxy injects **two different credentials**:
-  - For **api.github.com (gh)**, a token that **is** approved for the org's SSO.
-  - For **github.com git traffic**, the **Copilot CLI app token**, which **isn't**.
-- **Effect:** inside the sandbox, the agent can read repos and open PRs through `gh`, but **can't push**. That's a blocker for agent coding workflows in any SSO org.
-- **Possible fix:** the org owner approves the **"GitHub Copilot CLI"** app in **Org settings → Third-party access → OAuth application policy**, and you complete the SSO authorization. Because a per-user grant didn't help, **ask the org owner of Copilot-Sandboxes** to do this, then try the push again.
-  - If it still fails, raise it with GitHub along with CR-01.
+Window labels:
+- **🖥 TEST** = plain PowerShell window, no Copilot.
+- **🟢 ON** = the Copilot sandbox session. Paste lines starting with `!` exactly as shown.
 
-**Housekeeping**
-- Your first push attempt (`sbx-on-1` already existed) **committed onto `sbx-off-1` by mistake** (`06d22de`). It's harmless, but run this so the next tests start clean:
-  ```powershell
-  git switch main
-  ```
+### Step 0: set up the helper and go back to `main` (🖥 TEST, once)
+```powershell
+cd C:\SbxTest\repo\sbx-cred-test; git switch main
+```
+```powershell
+function Set-Sbx($k,$v){ $f="$env:USERPROFILE\.copilot\settings.json"; $j=Get-Content $f -Raw|ConvertFrom-Json; $o=$j.sandbox; $p=$k.Split('.'); for($i=0;$i -lt $p.Count-1;$i++){ if(-not $o.($p[$i])){ $o|Add-Member $p[$i] ([pscustomobject]@{}) -Force }; $o=$o.($p[$i]) }; $o|Add-Member $p[-1] $v -Force; $j|ConvertTo-Json -Depth 20|Set-Content $f -Encoding UTF8; "sandbox.$k = $v" }
+```
+- This edits `settings.json` safely, so there's **no risk of a JSON typo** (remember NW-14, where one bad value disabled the sandbox).
 
-**Still to do**
-1. **CR-04:** take a screenshot of the **server window**. It should show **`59a4ff611ec5`** for the ON request.
-   - Then run the same command in **Session OFF**. It should log **`6edbf1466d5e`**.
-2. **Procedure B, Session ON only.** Edit `settings.json`, then `/exit` and restart `copilot` each time:
-   - **CR-05:** `"auth": { "git": false, "gh": true }`. Run `!git push -u origin sbx-on-2` and the CR-03 command.
-   - **CR-06:** `"auth": { "git": true, "gh": false }`. Run `!gh api user --jq .login` and the CR-03 command.
-   - **CR-15, last:** `"allowBypass": true` with both auth settings `true`. Ask the model in plain words to run `gh auth status` **outside the sandbox**, and approve the bypass **once**.
-     - Use `gh auth status`, not the hash command, because the model refuses commands that read tokens.
-     - Then set `"allowBypass": false` again **straight away**.
+---
+
+### CR-05: git credentials off
+**🖥 TEST**
+```powershell
+Set-Sbx 'auth.git' $false; Set-Sbx 'auth.gh' $true
+```
+**🟢 ON:** type `/exit`, then:
+```powershell
+copilot
+```
+Type `/sandbox policy`. Check **Authenticate git: off** and the status bar shows **sandbox enabled**. Take a screenshot.
+```text
+!git switch -c sbx-on-3; Set-Content cr05.txt (Get-Date -Format s); git add .; git -c user.name=sbx -c user.email=sbx@test.local commit -m cr05; git push -u origin sbx-on-3
+```
+```text
+!$H = { param($n,$s) if (-not $s) { "$n = EMPTY" } else { $s = "$s".Trim(); $x = -join ([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($s))[0..5] | ForEach-Object { $_.ToString('x2') }); "$n = $($s.Substring(0,[Math]::Min(4,$s.Length)))… len $($s.Length) hash $x" } }; & $H 'gh auth token' (gh auth token); & $H 'GH_TOKEN' $env:GH_TOKEN; & $H 'git credential' (("protocol=https`nhost=github.com`n`n" | git credential fill 2>$null | Select-String '^password=') -replace '^password=','')
+```
+- **Expected:** the push fails with an **authentication** error, not the SSO error. `git credential` = EMPTY. `GH_TOKEN` = a placeholder.
+
+---
+
+### CR-06: gh credentials off
+**🖥 TEST**
+```powershell
+git switch main; Set-Sbx 'auth.git' $true; Set-Sbx 'auth.gh' $false
+```
+**🟢 ON:** `/exit`, then `copilot`, then `/sandbox policy`. Check **Authenticate gh: off**. Take a screenshot.
+```text
+!gh api user --jq .login
+```
+```text
+!$H = { param($n,$s) if (-not $s) { "$n = EMPTY" } else { $s = "$s".Trim(); $x = -join ([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($s))[0..5] | ForEach-Object { $_.ToString('x2') }); "$n = $($s.Substring(0,[Math]::Min(4,$s.Length)))… len $($s.Length) hash $x" } }; & $H 'gh auth token' (gh auth token); & $H 'GH_TOKEN' $env:GH_TOKEN; & $H 'git credential' (("protocol=https`nhost=github.com`n`n" | git credential fill 2>$null | Select-String '^password=') -replace '^password=','')
+```
+- **Expected:** `gh` is **not logged in**. `GH_TOKEN` = EMPTY. `gh auth token` fails or is EMPTY.
+- 🔴 **If `gh auth token` shows the real hash `6edbf1466d5e`, record a critical finding:** gh would be reading your stored login from Credential Manager.
+
+---
+
+### CR-15: bypass exposes real credentials (do this last)
+**🖥 TEST**
+```powershell
+Set-Sbx 'auth.git' $true; Set-Sbx 'auth.gh' $true; Set-Sbx 'allowBypass' $true
+```
+**🟢 ON:** `/exit`, then `copilot`, then `/sandbox policy`. Check **Allow sandbox bypass: yes**. Take a screenshot.
+
+First, sandboxed, for comparison:
+```text
+!gh auth status
+```
+Then ask the **model** (no `!`):
+```text
+Run the command "gh auth status" outside the sandbox. Request a sandbox bypass for it. Show the full output.
+```
+- **Approve the bypass prompt once.** Take a screenshot of the prompt and of the output.
+- **Expected:**
+  - The **sandboxed** run says it's logged in using **`GH_TOKEN`**, which is the placeholder.
+  - The **bypassed** run says it's logged in from the **keyring**, which is your real login. That proves bypass skips the credential masking.
+
+**🖥 TEST, straight away:**
+```powershell
+Set-Sbx 'allowBypass' $false
+```
+
+---
+
+### Restore (🖥 TEST)
+```powershell
+Copy-Item $env:USERPROFILE\.copilot\settings.backup.json $env:USERPROFILE\.copilot\settings.json -Force; git switch main
+```
+**🟢 ON:** `/exit`, then `copilot`, then `/sandbox policy`. Check **bypass: no**, git and gh both **on**, and **sandbox enabled**.
+
+Send the screenshots for each step. I'll then add the full CR evidence to the doc.
