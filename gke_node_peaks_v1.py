@@ -352,7 +352,7 @@ def fetch_counts(a, region, resolve, pool_shape):
                       "interval.startTime": iso(cs), "interval.endTime": iso(ce),
                       "aggregation.alignmentPeriod": f"{a.alignment}s",
                       "aggregation.perSeriesAligner": "ALIGN_MAX",
-                      "view": "FULL", "pageSize": str(a.page_size)}
+                      "view": "FULL", "pageSize": str(min(100000, max(1000, a.page_size)))}
             if page:
                 params["pageToken"] = page
             url = (f"https://monitoring.googleapis.com/v3/projects/{a.project}/timeSeries?"
@@ -616,8 +616,9 @@ def main():
     ap.add_argument("--alignment", type=int, default=300,
                     help="seconds per counting window (default 300; min 60)")
     ap.add_argument("--chunk-days", type=int, default=1, help="days per Monitoring API request (default 1)")
-    ap.add_argument("--page-size", type=int, default=100,
-                    help="node series per Monitoring API page (default 100)")
+    ap.add_argument("--page-size", type=int, default=100000,
+                    help="max data POINTS per Monitoring API page with view=FULL "
+                         "(API maximum and default 100000)")
     ap.add_argument("--log-limit", type=int, default=100000, help="max autoscaler log entries")
     ap.add_argument("--kube-context", help="run kubectl cross-check ('current' or a context name)")
     ap.add_argument("--growth-pct", type=float, default=0.0, help="growth %% added in sizing input")
