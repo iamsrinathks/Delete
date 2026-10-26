@@ -38,6 +38,7 @@ import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
+SCRIPT_VERSION = "2026-10-26.7"
 METRIC = "kubernetes.io/node/cpu/allocatable_cores"   # one series per node (k8s_node)
 AUTOSCALER_LOG = "container.googleapis.com/cluster-autoscaler-visibility"
 ZONE_RE = re.compile(r"^[a-z]+-[a-z]+\d+-[a-z]$")      # e.g. europe-west2-a
@@ -229,9 +230,106 @@ def shape_key(pool, vms_by_pool):
     ifaces = sorted({v["local_ssd_interface"] for v in vms_by_pool.get(pool["pool"], [])
                      if v["local_ssd_interface"]})
     lssd = f'{pool["local_ssd_count"]}{"/" + "+".join(ifaces) if ifaces else ""}'
-    return (f'{pool["machine_type"]}|cpu={pool["min_cpu_platform"] or "default"}'
+    # Reservations match the VM's machine type as Compute Engine reports it. Compute Engine
+    # can report a custom shape under a predefined name (n2-custom-32-32768 -> n2-highcpu-32),
+    # so prefer the most common live VM type and record any difference.
+    live_types = Counter(v["machine_type"] for v in vms_by_pool.get(pool["pool"], []))
+    mtype = live_types.most_common(1)[0][0] if live_types else pool["machine_type"]
+    pool["vm_machine_type"] = mtype
+    if live_types and mtype != pool["machine_type"]:
+        log(f'  ! pool {pool["pool"]}: config machine type {pool["machine_type"]} but VMs report '
+            f'{mtype} - shape uses {mtype} (what a reservation must match)')
+    return (f'{mtype}|cpu={pool["min_cpu_platform"] or "default"}'
             f'|gpu={pool["accelerators"] or "none"}|lssd={lssd}'
             f'|{"SPOT" if pool["spot"] else "STANDARD"}')
+
+
+# --------------------------------------------------------------------------- step 1b
+def shape_match_key(shape):
+    """(machine type, min CPU platform, gpus, local SSD count) from a shape string."""
+    p = (shape or "").split("|")
+    if len(p) < 5:
+        return None
+    cpu = p[1][4:] if p[1].startswith("cpu=") else ""
+    gpu = p[2][4:] if p[2].startswith("gpu=") else ""
+    lssd = p[3][5:].split("/")[0] if p[3].startswith("lssd=") else "0"
+    return (p[0], "" if cpu in ("default", "Automatic") else cpu,
+            "" if gpu == "none" else gpu, int(lssd or 0))
+
+
+def collect_capacity(a, region, vms):
+    """Existing reservations, regional quotas and machine specs (all read-only)."""
+    out = {"reservations": [], "quotas": [], "machine_specs": {}}
+    res = run_json(["gcloud", "compute", "reservations", "list", f"--project={a.project}",
+                    "--format=json"], allow_fail=True) or []
+    for r in res:
+        zone = base(r.get("zone"))
+        if not zone.startswith(region + "-"):
+            continue
+        sr = r.get("specificReservation", {}) or {}
+        ip = sr.get("instanceProperties", {}) or {}
+        accels = ",".join(f'{base(g.get("acceleratorType"))}x{g.get("acceleratorCount")}'
+                          for g in (ip.get("guestAccelerators") or []))
+        lssd = ip.get("localSsds") or []
+        cpu = ip.get("minCpuPlatform", "") or ""
+        count, in_use = int(sr.get("count", 0) or 0), int(sr.get("inUseCount", 0) or 0)
+        assured = sr.get("assuredCount")
+        out["reservations"].append({
+            "name": r.get("name", ""), "zone": zone, "status": r.get("status", ""),
+            "machine_type": base(ip.get("machineType", "")), "min_cpu_platform": cpu,
+            "accelerators": accels, "local_ssd_count": len(lssd),
+            "count": count, "in_use": in_use, "idle": max(0, count - in_use),
+            "assured_count": int(assured) if assured not in (None, "") else "",
+            "specific_required": bool(r.get("specificReservationRequired")),
+            "share_type": (r.get("shareSettings") or {}).get("shareType", "LOCAL"),
+            "key": list((base(ip.get("machineType", "")), "" if cpu.lower() == "automatic" else cpu,
+                         accels, len(lssd))),
+        })
+    reg = run_json(["gcloud", "compute", "regions", "describe", region, f"--project={a.project}",
+                    "--format=json"], allow_fail=True) or {}
+    for q in reg.get("quotas", []) or []:
+        lim, use = float(q.get("limit", 0) or 0), float(q.get("usage", 0) or 0)
+        if lim > 1e15:              # "unlimited" sentinel (9.22e18) - not useful in the report
+            continue
+        out["quotas"].append({"metric": q.get("metric", ""), "limit": lim, "usage": use,
+                              "available": max(0.0, lim - use)})
+    zone_for = {}
+    for v in vms:
+        zone_for.setdefault(v["machine_type"], v["zone"])
+    for r in out["reservations"]:
+        zone_for.setdefault(r["machine_type"], r["zone"])
+    for mt, z in sorted(zone_for.items()):
+        if not mt:
+            continue
+        d = run_json(["gcloud", "compute", "machine-types", "describe", mt, f"--zone={z}",
+                      f"--project={a.project}", "--format=json"], allow_fail=True)
+        if d:
+            out["machine_specs"][mt] = {"vcpus": int(d.get("guestCpus", 0) or 0),
+                                        "memory_gib": round(int(d.get("memoryMb", 0) or 0) / 1024, 2)}
+    return out
+
+
+def attach_reservations(sizing, reservations, pools, pool_shape):
+    """Adds existing reserved / in-use counts to each shape+zone row and marks which
+    pools each reservation can serve (exact shape match in the same zone)."""
+    by = defaultdict(list)
+    for r in reservations:
+        by[(tuple(r["key"]), r["zone"])].append(r)
+    for row in sizing:
+        k = shape_match_key(row["shape"])
+        hits = by.get((k, row["zone"]), []) if k else []
+        row["existing_reserved"] = sum(r["count"] for r in hits)
+        row["existing_in_use"] = sum(r["in_use"] for r in hits)
+        row["existing_names"] = ",".join(r["name"] for r in hits)
+        if any(r["specific_required"] for r in hits):
+            row["note"] = "; ".join(x for x in (row.get("note", ""),
+                                    "existing reservation is SPECIFIC - pools need specific affinity") if x)
+    for r in reservations:
+        k = tuple(r["key"])
+        r["matched_pools"] = ",".join(sorted(p["pool"] for p in pools
+                                             if shape_match_key(pool_shape[p["pool"]]) == k
+                                             and r["zone"] in (p["locations"] or r["zone"])))
+        r["key"] = "|".join(str(x) for x in r["key"])
 
 
 # --------------------------------------------------------------------------- step 2
@@ -547,8 +645,11 @@ def sizing_rows(shape_zone_stats, pools, pool_shape, a):
                    and (not p["locations"] or zone in p["locations"].split(","))]
         specific = any(p["reservation_affinity"] == "SPECIFIC_RESERVATION" for p in members)
         surge = sum(p["max_surge"] for p in members) if (specific or a.include_surge) else 0
-        basis = st["peak_excl_upgrades"] or st["peak"]
-        sized = math.ceil(basis * (1 + a.growth_pct / 100)) + surge
+        basis = st["peak"] if getattr(a, "basis", "peak") == "peak" else (st["peak_excl_upgrades"] or st["peak"])
+        factor = 1 + a.growth_pct / 100
+        up = math.ceil(round(basis * factor, 6))      # round() avoids 10 x 1.1 -> 11.000000000000002 -> 12
+        sized = up + surge
+        formula = f"{basis} x {factor:.2f} = {basis * factor:.2f} -> {up}" + (f" + {surge} surge = {sized}" if surge else "")
         note = []
         if shape == "UNKNOWN":
             note.append("unmapped nodes - not sizeable")
@@ -562,7 +663,7 @@ def sizing_rows(shape_zone_stats, pools, pool_shape, a):
             note.append("pools with different affinities share this shape - review surge")
         out.append({"shape": shape, "zone": zone, "pools": ",".join(p["pool"] for p in members),
                     "peak_excl_upgrades": st["peak_excl_upgrades"], "peak": st["peak"],
-                    "growth_pct": a.growth_pct, "surge_headroom": surge,
+                    "growth_pct": a.growth_pct, "surge_headroom": surge, "formula": formula,
                     "sizing_input": sized if shape != "UNKNOWN" and "|SPOT" not in shape else "",
                     "note": "; ".join(note)})
     return out
@@ -622,15 +723,20 @@ def main():
     ap.add_argument("--log-limit", type=int, default=100000, help="max autoscaler log entries")
     ap.add_argument("--kube-context", help="run kubectl cross-check ('current' or a context name)")
     ap.add_argument("--growth-pct", type=float, default=0.0, help="growth %% added in sizing input")
+    ap.add_argument("--basis", choices=["peak", "peak_excl_upgrades"], default="peak",
+                    help="value the headroom %% is applied to (default: peak)")
     ap.add_argument("--include-surge", action="store_true",
                     help="add maxSurge headroom even for non-specific affinity pools")
     ap.add_argument("--skip-monitoring", action="store_true")
     ap.add_argument("--skip-logs", action="store_true")
+    ap.add_argument("--skip-capacity", action="store_true",
+                    help="skip existing reservations, regional quotas and machine specs")
     ap.add_argument("--out-dir", help="output directory (default ./node-peaks-<cluster>-<ts>)")
     ap.add_argument("--html-template", default=DEFAULT_TEMPLATE,
                     help="HTML template for report.html (default: gke_capacity_report.html next to this script)")
     a = ap.parse_args()
     a.alignment = max(60, a.alignment)
+    log(f"gke_node_peaks.py version {SCRIPT_VERSION} (Monitoring pageSize={min(100000, max(1000, a.page_size))} points)")
     region = region_of(a.location)
     out = a.out_dir or f"node-peaks-{a.cluster}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     os.makedirs(out, exist_ok=True)
@@ -650,7 +756,7 @@ def main():
         p["shape"] = pool_shape[p["pool"]]
         p["live_nodes"] = len(vms_by_pool.get(p["pool"], []))
 
-    pool_cols = ["pool", "shape", "live_nodes", "locations", "autoscaling", "min_per_zone",
+    pool_cols = ["pool", "shape", "vm_machine_type", "live_nodes", "locations", "autoscaling", "min_per_zone",
                  "max_per_zone", "total_min", "total_max", "location_policy",
                  "reservation_affinity", "reservation_values", "upgrade_strategy",
                  "max_surge", "max_unavailable", "version"]
@@ -671,6 +777,21 @@ def main():
                 ["pool", "zone", "machine_type", "status", "vms"])
     report["pools"] = [{k: v for k, v in p.items() if k != "migs"} for p in pools]
     report["live"] = live_rows
+    capacity = {"reservations": [], "quotas": [], "machine_specs": {}}
+    if not a.skip_capacity:
+        log("STEP 1b: existing reservations, regional quotas, machine specs")
+        capacity = collect_capacity(a, region, vms)
+        report.update(capacity)
+        write_csv(f"{out}/existing_reservations.csv", capacity["reservations"],
+                  ["name", "zone", "status", "machine_type", "min_cpu_platform", "accelerators",
+                   "local_ssd_count", "count", "in_use", "idle", "assured_count", "specific_required",
+                   "share_type"])
+        write_csv(f"{out}/regional_quotas.csv", capacity["quotas"], ["metric", "limit", "usage", "available"])
+        print_table("Existing reservations in region", capacity["reservations"],
+                    ["name", "zone", "machine_type", "count", "in_use", "idle", "specific_required"])
+        idle = sum(r["idle"] for r in capacity["reservations"])
+        if idle:
+            log(f"  ! {idle} reserved VM slot(s) are idle - you pay for them at on-demand rates")
     # Reservations match machine type + min CPU platform (not the actual platform a VM got).
     mixed = [p for p, vs in vms_by_pool.items()
              if len({(v["machine_type"], v["min_cpu_platform"]) for v in vs}) > 1]
@@ -759,13 +880,22 @@ def main():
             write_csv(f"{out}/timeseries_pool_zone.csv", ts_rows, ["window_utc", "pool", "zone", "nodes"])
 
             sz = sizing_rows(shape_zone_stats, pools, pool_shape, a)
+            if capacity["reservations"] or not a.skip_capacity:
+                attach_reservations(sz, capacity["reservations"], pools, pool_shape)
+                report["reservations"] = capacity["reservations"]
             report["sizing"] = sz
             write_csv(f"{out}/sizing_input_shape_zone.csv", sz,
                       ["shape", "zone", "pools", "peak_excl_upgrades", "peak", "growth_pct",
-                       "surge_headroom", "sizing_input", "note"])
-            print_table("Sizing input per shape / zone (peak excl. upgrades x growth + surge)", sz,
-                        ["shape", "zone", "peak_excl_upgrades", "surge_headroom",
-                         "sizing_input", "note"])
+                       "surge_headroom", "formula", "sizing_input", "existing_reserved",
+                       "existing_in_use", "existing_names", "note"])
+            if capacity["reservations"]:
+                write_csv(f"{out}/existing_reservations.csv", capacity["reservations"],
+                          ["name", "zone", "status", "machine_type", "min_cpu_platform", "accelerators",
+                           "local_ssd_count", "count", "in_use", "idle", "assured_count",
+                           "specific_required", "share_type", "matched_pools"])
+            print_table(f"Sizing input per shape / zone ({a.basis} x (1 + {a.growth_pct:g}%) + surge)", sz,
+                        ["shape", "zone", "peak", "peak_excl_upgrades", "formula", "sizing_input",
+                         "existing_reserved", "existing_in_use"])
 
     # ---- step 3
     if not a.skip_logs:
