@@ -1,31 +1,36 @@
-**First result: in Session ON, `GH_TOKEN` is set inside the sandbox** (`gho_…`, length **49**). A normal `gho_` token is **40** characters, so this is **very likely the placeholder**. We still need the real hash to confirm.
+Most of Procedure A is now settled. One result is still missing: the **server-window hash for CR-04**.
 
-**Two problems to fix first**
+**Results in Session ON**
 
-**1. `gh` isn't found inside the sandbox.**
-- **Most likely cause:** this Copilot window was opened **before** you installed `gh`, so its PATH is out of date.
-  1. **Close this terminal window completely** and open a new one.
-  2. Run `cd C:\SbxTest\repo\sbx-cred-test`, then `copilot`.
-  3. Run `!gh --version`.
-- **If `gh` still isn't found,** in the **test window** run:
+| Test | Result | Verdict |
+| --- | --- | --- |
+| **CR-03** token visible | Placeholder `59a4ff611ec5` (len 49), not the real `6edbf1466d5e` (len 40). `git credential` is EMPTY | ✅ **Pass** |
+| **CR-02** gh works | Login shown, and private `sbx-cred-test` visible | ✅ **Pass**: the proxy swaps in a token that works |
+| **CR-04** token sent to another host | `ECHO-OK`. **Need the server-window line** | 🔍 Pending |
+| **CR-11** credential files | `.npmrc` and `gh hosts.yml` → **Access is denied** (both readable in OFF) | ✅ **Pass** |
+| **CR-01** git push | **403 SAML SSO**: "re-authorize the OAuth Application 'GitHub Copilot CLI'" | 🔴 **Fail (finding)** |
+
+**🔴 Finding: gh and git get different tokens from the proxy**
+- **`gh repo view` reached the private org repo**, but **`git push` to the same repo got 403 SSO**.
+- So the proxy injects **two different credentials**:
+  - For **api.github.com (gh)**, a token that **is** approved for the org's SSO.
+  - For **github.com git traffic**, the **Copilot CLI app token**, which **isn't**.
+- **Effect:** inside the sandbox, the agent can read repos and open PRs through `gh`, but **can't push**. That's a blocker for agent coding workflows in any SSO org.
+- **Possible fix:** the org owner approves the **"GitHub Copilot CLI"** app in **Org settings → Third-party access → OAuth application policy**, and you complete the SSO authorization. Because a per-user grant didn't help, **ask the org owner of Copilot-Sandboxes** to do this, then try the push again.
+  - If it still fails, raise it with GitHub along with CR-01.
+
+**Housekeeping**
+- Your first push attempt (`sbx-on-1` already existed) **committed onto `sbx-off-1` by mistake** (`06d22de`). It's harmless, but run this so the next tests start clean:
   ```powershell
-  (Get-Command gh).Source
+  git switch main
   ```
-  If the path is under `AppData\Local\Microsoft\WinGet\...`, the sandbox probably **can't read that folder**. That's a finding in its own right: **a per-user winget install of gh doesn't work in the sandbox.** A machine-wide install (MSI or Intune) under `C:\Program Files\GitHub CLI` would.
 
-**2. The test-window command failed because of a copy error.**
-- You copied it from the Copilot screen, so it picked up the labels **"(sandboxed) 11 lines"**.
-- Copy this **clean line** instead and paste it into the **test window** (plain PowerShell, no `!`):
-```powershell
-$H = { param($n,$s) if (-not $s) { "$n = EMPTY" } else { $s = "$s".Trim(); $x = -join ([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($s))[0..5] | ForEach-Object { $_.ToString('x2') }); "$n = $($s.Substring(0,[Math]::Min(4,$s.Length)))… len $($s.Length) hash $x" } }; & $H 'gh auth token' (gh auth token); & $H 'GH_TOKEN' $env:GH_TOKEN; & $H 'GITHUB_TOKEN' $env:GITHUB_TOKEN; & $H 'git credential' (("protocol=https`nhost=github.com`n`n" | git credential fill 2>$null | Select-String '^password=') -replace '^password=','')
-```
-
-**What to compare**
-
-| Value | Session ON (so far) | Test window (real) | Pass if |
-| --- | --- | --- | --- |
-| `GH_TOKEN` | `gho_` len 49, hash `9fe92db35e2e` | probably EMPTY | ON is a placeholder: the hash differs from the real `gh auth token` hash |
-| `gh auth token` | (gh not found) | `gho_…` len 40, hash ? | ON hash ≠ real hash |
-| `git credential` | EMPTY | real hash | ON stays EMPTY (Credential Manager not reachable) ✅ |
-
-Send the test-window output and the result of `!gh --version` after the restart. Then we'll carry on with CR-02, CR-04, CR-11 and CR-01.
+**Still to do**
+1. **CR-04:** take a screenshot of the **server window**. It should show **`59a4ff611ec5`** for the ON request.
+   - Then run the same command in **Session OFF**. It should log **`6edbf1466d5e`**.
+2. **Procedure B, Session ON only.** Edit `settings.json`, then `/exit` and restart `copilot` each time:
+   - **CR-05:** `"auth": { "git": false, "gh": true }`. Run `!git push -u origin sbx-on-2` and the CR-03 command.
+   - **CR-06:** `"auth": { "git": true, "gh": false }`. Run `!gh api user --jq .login` and the CR-03 command.
+   - **CR-15, last:** `"allowBypass": true` with both auth settings `true`. Ask the model in plain words to run `gh auth status` **outside the sandbox**, and approve the bypass **once**.
+     - Use `gh auth status`, not the hash command, because the model refuses commands that read tokens.
+     - Then set `"allowBypass": false` again **straight away**.
