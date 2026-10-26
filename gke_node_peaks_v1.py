@@ -247,13 +247,38 @@ class Token:
         return self.tok
 
 
-def http_get_json(url, tok):
+def setup_proxy():
+    """urllib does not read gcloud's proxy settings. Reuse them (or HTTPS_PROXY) if set."""
+    if os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy"):
+        log(f"  using HTTPS_PROXY={os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')}")
+        return
+    def cfg(key):
+        try:
+            return subprocess.run(["gcloud", "config", "get-value", key], capture_output=True,
+                                  text=True, timeout=30).stdout.strip()
+        except Exception:
+            return ""
+    addr, port = cfg("proxy/address"), cfg("proxy/port")
+    if addr:
+        user, pwd = cfg("proxy/username"), cfg("proxy/password")
+        auth = f"{urllib.parse.quote(user)}:{urllib.parse.quote(pwd)}@" if user else ""
+        proxy = f"http://{auth}{addr}{':' + port if port else ''}"
+        urllib.request.install_opener(urllib.request.build_opener(
+            urllib.request.ProxyHandler({"https": proxy, "http": proxy})))
+        log(f"  using gcloud proxy {addr}{':' + port if port else ''}")
+
+
+def http_get_json(url, tok, timeout=90):
     force = False
     for attempt in range(6):
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok.get(force)}"})
         try:
-            with urllib.request.urlopen(req, timeout=120) as r:
-                return json.loads(r.read().decode())
+            t0 = time.time()
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                body = r.read()
+            data = json.loads(body.decode())
+            data["_bytes"], data["_secs"] = len(body), round(time.time() - t0, 1)
+            return data
         except urllib.error.HTTPError as e:
             body = e.read().decode()[:500]
             if e.code == 401 and attempt == 0:
@@ -269,7 +294,26 @@ def http_get_json(url, tok):
             wait = 2 ** attempt
             log(f"  ! network error {e.reason}, retrying in {wait}s")
             time.sleep(wait)
-    sys.exit("ERROR: Monitoring API failed after retries")
+        except (TimeoutError, ConnectionError, OSError) as e:   # read timeouts, resets
+            wait = 2 ** attempt
+            log(f"  ! timeout/connection error ({e}), retrying in {wait}s")
+            time.sleep(wait)
+    sys.exit("ERROR: Monitoring API failed after retries - check network/proxy access to "
+             "monitoring.googleapis.com (see --chunk-days / HTTPS_PROXY)")
+
+
+def preflight(a, region, tok):
+    """Tiny 15-minute query: proves API reachability and auth before the long run."""
+    end = datetime.now(timezone.utc).replace(microsecond=0)
+    params = {"filter": f'metric.type="{METRIC}" AND resource.type="k8s_node" '
+                        f'AND resource.labels.cluster_name="{a.cluster}"',
+              "interval.startTime": iso(end - timedelta(minutes=15)), "interval.endTime": iso(end),
+              "view": "HEADERS"}
+    url = (f"https://monitoring.googleapis.com/v3/projects/{a.project}/timeSeries?"
+           + urllib.parse.urlencode(params))
+    log("  preflight: 15-minute test query to monitoring.googleapis.com ...")
+    data = http_get_json(url, tok, timeout=30)
+    log(f"  preflight OK in {data.get('_secs', 0)}s: {len(data.get('timeSeries', []) or [])} node series now")
 
 
 def group_keys(pool, zone, shape):
@@ -281,7 +325,10 @@ def fetch_counts(a, region, resolve, pool_shape):
     """Streams Cloud Monitoring per-node series and counts nodes per window and group.
     Memory grows with groups x windows, not nodes x windows."""
     tok = Token()
+    setup_proxy()
+    preflight(a, region, tok)
     al = a.alignment
+    t_start, n_chunks = time.time(), 0
     end_e = int(time.time()) // al * al                       # windows on alignment boundaries
     start_e = end_e - a.days * 86400 // al * al
     chunk = max(al, a.chunk_days * 86400 // al * al)
@@ -295,20 +342,27 @@ def fetch_counts(a, region, resolve, pool_shape):
         hi = min(lo + chunk, end_e)
         cs = datetime.fromtimestamp(lo, timezone.utc)
         ce = datetime.fromtimestamp(hi, timezone.utc)
-        log(f"  monitoring {iso(cs)} -> {iso(ce)}")
+        n_chunks += 1
+        total_chunks = math.ceil((end_e - start_e) / chunk)
+        log(f"  monitoring chunk {n_chunks}/{total_chunks}: {iso(cs)} -> {iso(ce)}")
         chunk_seen = {}                                     # node -> windows in this chunk
-        page = None
+        page, page_no = None, 0
         while True:
             params = {"filter": flt,
                       "interval.startTime": iso(cs), "interval.endTime": iso(ce),
                       "aggregation.alignmentPeriod": f"{a.alignment}s",
                       "aggregation.perSeriesAligner": "ALIGN_MAX",
-                      "view": "FULL", "pageSize": "1000"}
+                      "view": "FULL", "pageSize": str(a.page_size)}
             if page:
                 params["pageToken"] = page
             url = (f"https://monitoring.googleapis.com/v3/projects/{a.project}/timeSeries?"
                    + urllib.parse.urlencode(params))
             data = http_get_json(url, tok)
+            page_no += 1
+            n_series = len(data.get("timeSeries", []) or [])
+            n_points = sum(len(t.get("points", []) or []) for t in data.get("timeSeries", []) or [])
+            log(f"    page {page_no}: {n_series} series, {n_points} points, "
+                f"{data.get('_bytes', 0) / 1e6:.1f} MB in {data.get('_secs', 0)}s")
             for ts in data.get("timeSeries", []) or []:
                 rl = ts.get("resource", {}).get("labels", {})
                 node = rl.get("node_name")
@@ -332,6 +386,10 @@ def fetch_counts(a, region, resolve, pool_shape):
             if not page:
                 break
         lo = hi
+        done = (lo - start_e) / max(1, end_e - start_e)
+        el = time.time() - t_start
+        log(f"  progress {done:.0%}, elapsed {el:.0f}s, ETA ~{el / done * (1 - done):.0f}s, "
+            f"nodes seen {len(node_map)}")
     return series, sorted(windows), node_map, node_loc
 
 
@@ -557,7 +615,9 @@ def main():
     ap.add_argument("--days", type=int, default=30, help="history window (default 30)")
     ap.add_argument("--alignment", type=int, default=300,
                     help="seconds per counting window (default 300; min 60)")
-    ap.add_argument("--chunk-days", type=int, default=7, help="days per Monitoring API request")
+    ap.add_argument("--chunk-days", type=int, default=1, help="days per Monitoring API request (default 1)")
+    ap.add_argument("--page-size", type=int, default=100,
+                    help="node series per Monitoring API page (default 100)")
     ap.add_argument("--log-limit", type=int, default=100000, help="max autoscaler log entries")
     ap.add_argument("--kube-context", help="run kubectl cross-check ('current' or a context name)")
     ap.add_argument("--growth-pct", type=float, default=0.0, help="growth %% added in sizing input")
