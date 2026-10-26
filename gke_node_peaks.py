@@ -1,0 +1,664 @@
+#!/usr/bin/env python3
+"""
+gke_node_peaks.py - measure GKE node counts per node pool, zone and machine
+shape, as input for sizing Compute Engine reservations.
+
+  Step 1  Live inventory    node pools (gcloud container), node VMs
+                            (gcloud compute), optional kubectl cross-check.
+  Step 2  Historical peaks  Cloud Monitoring per-node metric, counted per
+                            alignment window and mapped to pool / zone / shape.
+                            Reports MAX, P95, mean - with and without node
+                            upgrade windows (surge nodes).
+  Step 3  Autoscaler logs   cluster-autoscaler-visibility scaleUp / scaleDown /
+                            failed scale-ups / noScaleUp per pool and zone.
+
+Read-only: only describe / list / read calls are made.
+Needs: Python 3.8+, gcloud (authenticated). kubectl is optional.
+IAM (read-only): container.clusters.get, container.operations.list,
+compute.instances.list, monitoring.timeSeries.list, logging.logEntries.list
+(e.g. roles/container.viewer, compute.viewer, monitoring.viewer, logging.viewer).
+
+Example:
+  python3 gke_node_peaks.py --project my-proj --cluster tr1-pre \
+      --location europe-west2 --days 90 --kube-context current
+"""
+
+import argparse
+import csv
+import json
+import math
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
+
+METRIC = "kubernetes.io/node/cpu/allocatable_cores"   # one series per node (k8s_node)
+AUTOSCALER_LOG = "container.googleapis.com/cluster-autoscaler-visibility"
+ZONE_RE = re.compile(r"^[a-z]+-[a-z]+\d+-[a-z]$")      # e.g. europe-west2-a
+
+
+# --------------------------------------------------------------------------- helpers
+def log(msg):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", file=sys.stderr)
+
+
+def base(url):
+    return url.rstrip("/").split("/")[-1] if url else ""
+
+
+def iso(dt):
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_ts(s):
+    """RFC3339 (with or without fractional seconds) -> epoch seconds (int)."""
+    s = s.replace("Z", "+00:00")
+    if "." in s:
+        head, tail = s.split(".", 1)
+        tz = tail[tail.find("+"):] if "+" in tail else ""
+        s = head + tz
+    return int(datetime.fromisoformat(s).timestamp())
+
+
+def fmt_epoch(e):
+    return datetime.fromtimestamp(e, timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if e else ""
+
+
+def region_of(location):
+    return location.rsplit("-", 1)[0] if ZONE_RE.match(location) else location
+
+
+def loc_flag(location):
+    return f"--zone={location}" if ZONE_RE.match(location) else f"--region={location}"
+
+
+def run_json(cmd, allow_fail=False):
+    log("$ " + " ".join(cmd))
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    except FileNotFoundError:
+        if allow_fail:
+            log(f"  ! {cmd[0]} not found - skipped")
+            return None
+        sys.exit(f"ERROR: {cmd[0]} not found on PATH")
+    except subprocess.CalledProcessError as e:
+        if allow_fail:
+            log(f"  ! command failed - skipped: {e.stderr.strip()[:400]}")
+            return None
+        sys.exit(f"ERROR running: {' '.join(cmd)}\n{e.stderr}")
+    out = res.stdout.strip()
+    return json.loads(out) if out else []
+
+
+def percentile(vals, p):
+    if not vals:
+        return 0
+    s = sorted(vals)
+    k = max(0, math.ceil(p / 100 * len(s)) - 1)
+    return s[k]
+
+
+def write_csv(path, rows, cols):
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+
+
+def print_table(title, rows, cols):
+    print(f"\n=== {title} ===")
+    if not rows:
+        print("(no data)")
+        return
+    widths = {c: max(len(c), *(len(str(r.get(c, ""))) for r in rows)) for c in cols}
+    print("  ".join(c.ljust(widths[c]) for c in cols))
+    print("  ".join("-" * widths[c] for c in cols))
+    for r in rows:
+        print("  ".join(str(r.get(c, "")).ljust(widths[c]) for c in cols))
+
+
+# --------------------------------------------------------------------------- step 1
+def describe_pools(a):
+    cluster = run_json(["gcloud", "container", "clusters", "describe", a.cluster,
+                        loc_flag(a.location), f"--project={a.project}", "--format=json"])
+    pools = []
+    for p in cluster.get("nodePools", []) or []:
+        c = p.get("config", {}) or {}
+        accels = ",".join(f'{x.get("acceleratorType")}x{x.get("acceleratorCount")}'
+                          for x in (c.get("accelerators") or []))
+        lssd = (c.get("localSsdCount")
+                or (c.get("ephemeralStorageLocalSsdConfig") or {}).get("localSsdCount")
+                or (c.get("localNvmeSsdBlockConfig") or {}).get("localSsdCount") or 0)
+        ra = c.get("reservationAffinity") or {}
+        auto = p.get("autoscaling") or {}
+        up = p.get("upgradeSettings") or {}
+        migs = []
+        for u in p.get("instanceGroupUrls", []) or []:
+            m = re.search(r"/zones/([^/]+)/instanceGroup(?:Manager)?s/([^/]+)$", u)
+            if m:
+                migs.append((m.group(1), m.group(2)))
+        pools.append({
+            "pool": p["name"],
+            "machine_type": c.get("machineType", ""),
+            "min_cpu_platform": c.get("minCpuPlatform", ""),
+            "accelerators": accels,
+            "local_ssd_count": int(lssd),
+            "spot": bool(c.get("spot") or c.get("preemptible")),
+            "reservation_affinity": ra.get("consumeReservationType", "UNSPECIFIED"),
+            "reservation_values": ",".join(ra.get("values", []) or []),
+            "locations": ",".join(p.get("locations", []) or []),
+            "autoscaling": bool(auto.get("enabled")),
+            "min_per_zone": auto.get("minNodeCount", ""),
+            "max_per_zone": auto.get("maxNodeCount", ""),
+            "total_min": auto.get("totalMinNodeCount", ""),
+            "total_max": auto.get("totalMaxNodeCount", ""),
+            "location_policy": auto.get("locationPolicy", ""),
+            "upgrade_strategy": up.get("strategy", "SURGE"),
+            "max_surge": int(up.get("maxSurge", 0) or 0),
+            "max_unavailable": int(up.get("maxUnavailable", 0) or 0),
+            "version": p.get("version", ""),
+            "migs": migs,
+        })
+    return pools
+
+
+def list_vms(a, region):
+    vms = run_json(["gcloud", "compute", "instances", "list", f"--project={a.project}",
+                    f"--filter=labels.goog-k8s-cluster-name={a.cluster}", "--format=json"])
+    out = []
+    for v in vms or []:
+        zone = base(v.get("zone"))
+        if not zone.startswith(region + "-"):
+            continue  # same cluster name in another region
+        labels = v.get("labels", {}) or {}
+        sched = v.get("scheduling", {}) or {}
+        scratch = [d for d in v.get("disks", []) or [] if d.get("type") == "SCRATCH"]
+        out.append({
+            "name": v["name"],
+            "zone": zone,
+            "pool": labels.get("goog-k8s-node-pool-name", ""),
+            "machine_type": base(v.get("machineType")),
+            "status": v.get("status", ""),
+            "min_cpu_platform": v.get("minCpuPlatform", ""),
+            "cpu_platform": v.get("cpuPlatform", ""),
+            "accelerators": ",".join(f'{base(g.get("acceleratorType"))}x{g.get("acceleratorCount")}'
+                                     for g in (v.get("guestAccelerators") or [])),
+            "local_ssd_count": len(scratch),
+            "local_ssd_interface": ",".join(sorted({d.get("interface", "") for d in scratch})),
+            "provisioning": "SPOT" if (sched.get("provisioningModel") == "SPOT"
+                                       or sched.get("preemptible")) else "STANDARD",
+            "vm_reservation_affinity": (v.get("reservationAffinity") or {}).get(
+                "consumeReservationType", ""),
+        })
+    return out
+
+
+def list_k8s_nodes(a):
+    cmd = ["kubectl", "get", "nodes", "-o", "json"]
+    if a.kube_context and a.kube_context != "current":
+        cmd += ["--context", a.kube_context]
+    d = run_json(cmd, allow_fail=True)
+    if not d:
+        return None
+    nodes = []
+    for n in d.get("items", []):
+        lb = n["metadata"].get("labels", {})
+        ready = next((c["status"] for c in n.get("status", {}).get("conditions", [])
+                      if c["type"] == "Ready"), "Unknown")
+        nodes.append({"name": n["metadata"]["name"],
+                      "pool": lb.get("cloud.google.com/gke-nodepool", ""),
+                      "zone": lb.get("topology.kubernetes.io/zone", ""),
+                      "machine_type": lb.get("node.kubernetes.io/instance-type", ""),
+                      "ready": ready,
+                      "unschedulable": n.get("spec", {}).get("unschedulable", False)})
+    return nodes
+
+
+def shape_key(pool, vms_by_pool):
+    """Reservation-relevant shape: machine type, min CPU platform, GPUs, Local SSD
+    (count + interface), provisioning model."""
+    ifaces = sorted({v["local_ssd_interface"] for v in vms_by_pool.get(pool["pool"], [])
+                     if v["local_ssd_interface"]})
+    lssd = f'{pool["local_ssd_count"]}{"/" + "+".join(ifaces) if ifaces else ""}'
+    return (f'{pool["machine_type"]}|cpu={pool["min_cpu_platform"] or "default"}'
+            f'|gpu={pool["accelerators"] or "none"}|lssd={lssd}'
+            f'|{"SPOT" if pool["spot"] else "STANDARD"}')
+
+
+# --------------------------------------------------------------------------- step 2
+class Token:
+    def __init__(self):
+        self.tok, self.t = None, 0
+
+    def get(self, force=False):
+        if force or not self.tok or time.time() - self.t > 1800:
+            self.tok = subprocess.run(["gcloud", "auth", "print-access-token"],
+                                      capture_output=True, text=True, check=True).stdout.strip()
+            self.t = time.time()
+        return self.tok
+
+
+def http_get_json(url, tok):
+    force = False
+    for attempt in range(6):
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok.get(force)}"})
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return json.loads(r.read().decode())
+        except urllib.error.HTTPError as e:
+            body = e.read().decode()[:500]
+            if e.code == 401 and attempt == 0:
+                force = True
+                continue
+            if e.code in (429, 500, 502, 503, 504):
+                wait = 2 ** attempt
+                log(f"  ! HTTP {e.code}, retrying in {wait}s")
+                time.sleep(wait)
+                continue
+            sys.exit(f"ERROR: Monitoring API HTTP {e.code}: {body}")
+        except urllib.error.URLError as e:
+            wait = 2 ** attempt
+            log(f"  ! network error {e.reason}, retrying in {wait}s")
+            time.sleep(wait)
+    sys.exit("ERROR: Monitoring API failed after retries")
+
+
+def fetch_presence(a, region):
+    """Returns {window_epoch: set(node_name)} and {node_name: monitoring location}."""
+    tok = Token()
+    end = datetime.now(timezone.utc).replace(microsecond=0)
+    start = end - timedelta(days=a.days)
+    flt = (f'metric.type="{METRIC}" AND resource.type="k8s_node" '
+           f'AND resource.labels.cluster_name="{a.cluster}" '
+           f'AND resource.labels.location=starts_with("{region}")')
+    presence, node_loc = defaultdict(set), {}
+    cs = start
+    while cs < end:
+        ce = min(cs + timedelta(days=a.chunk_days), end)
+        log(f"  monitoring {iso(cs)} -> {iso(ce)}")
+        page = None
+        while True:
+            params = {"filter": flt,
+                      "interval.startTime": iso(cs), "interval.endTime": iso(ce),
+                      "aggregation.alignmentPeriod": f"{a.alignment}s",
+                      "aggregation.perSeriesAligner": "ALIGN_MAX",
+                      "view": "FULL", "pageSize": "1000"}
+            if page:
+                params["pageToken"] = page
+            url = (f"https://monitoring.googleapis.com/v3/projects/{a.project}/timeSeries?"
+                   + urllib.parse.urlencode(params))
+            data = http_get_json(url, tok)
+            for ts in data.get("timeSeries", []) or []:
+                rl = ts.get("resource", {}).get("labels", {})
+                node = rl.get("node_name")
+                if not node:
+                    continue
+                node_loc.setdefault(node, rl.get("location", ""))
+                for p in ts.get("points", []) or []:
+                    presence[parse_ts(p["interval"]["endTime"])].add(node)
+            page = data.get("nextPageToken")
+            if not page:
+                break
+        cs = ce
+    return presence, node_loc
+
+
+def build_resolver(pools, vms):
+    """node name -> (pool, zone, method). Order: live VM labels, MIG name prefix,
+    then a name heuristic for nodes from pools/MIGs that no longer exist."""
+    by_name = {v["name"]: (v["pool"], v["zone"]) for v in vms}
+    mig_prefix = {}
+    for p in pools:
+        for zone, mig in p["migs"]:
+            mig_prefix[mig[:-4] if mig.endswith("-grp") else mig] = (p["pool"], zone)
+    pool_names = sorted((p["pool"] for p in pools), key=len, reverse=True)
+
+    def resolve(node, mon_loc=""):
+        if node in by_name:
+            return by_name[node] + ("live",)
+        pre = node.rsplit("-", 1)[0]
+        if pre in mig_prefix:
+            return mig_prefix[pre] + ("mig",)
+        zone = mon_loc if ZONE_RE.match(mon_loc or "") else "unknown-zone"
+        core = node[4:] if node.startswith("gke-") else node
+        parts = core.rsplit("-", 2)               # <cluster>-<pool>, <hash>, <suffix>
+        if len(parts) == 3:
+            for pn in pool_names:                 # node names truncate long pool names
+                for k in range(len(pn), 3, -1):
+                    if parts[0].endswith("-" + pn[:k]):
+                        return (pn, zone, "heuristic")
+        return ("UNMAPPED", zone, "unmapped")
+
+    return resolve
+
+
+DIMS = ("pool_zone", "shape_zone", "pool", "zone", "shape", "cluster")
+
+
+def count_windows(presence, node_map, pool_shape):
+    """{dim: {key: {window: count}}} - peak of a sum is computed per window,
+    never as a sum of separate peaks."""
+    series = {d: defaultdict(dict) for d in DIMS}
+    for w, nodes in presence.items():
+        c = Counter()
+        for n in nodes:
+            pool, zone, _ = node_map[n]
+            shape = pool_shape.get(pool, "UNKNOWN")
+            c[("pool_zone", (pool, zone))] += 1
+            c[("shape_zone", (shape, zone))] += 1
+            c[("pool", (pool,))] += 1
+            c[("zone", (zone,))] += 1
+            c[("shape", (shape,))] += 1
+            c[("cluster", ("ALL",))] += 1
+        for (dim, key), v in c.items():
+            series[dim][key][w] = v
+    return series
+
+
+def summarise(by_w, windows, excluded):
+    vals = [by_w.get(w, 0) for w in windows]
+    peak = max(vals) if vals else 0
+    peak_w = next((w for w in windows if by_w.get(w, 0) == peak), None)
+    kept = [w for w in windows if w not in excluded]
+    ex_vals = [by_w.get(w, 0) for w in kept]
+    ex_peak = max(ex_vals) if ex_vals else 0
+    ex_peak_w = next((w for w in kept if by_w.get(w, 0) == ex_peak), None)
+    return {"peak": peak, "peak_time": fmt_epoch(peak_w),
+            "peak_excl_upgrades": ex_peak, "peak_excl_upgrades_time": fmt_epoch(ex_peak_w),
+            "p95": percentile(vals, 95), "mean": round(sum(vals) / len(vals), 2) if vals else 0,
+            "min": min(vals) if vals else 0}
+
+
+def upgrade_windows(a, windows):
+    """Windows overlapping UPGRADE_NODES operations on this cluster (surge nodes)."""
+    ops = run_json(["gcloud", "container", "operations", "list", f"--project={a.project}",
+                    loc_flag(a.location), "--filter=operationType=UPGRADE_NODES",
+                    "--format=json"], allow_fail=True) or []
+    spans, rows = [], []
+    for op in ops:
+        tl = op.get("targetLink", "") or ""
+        if f"/clusters/{a.cluster}/" not in tl + "/":
+            continue
+        try:
+            s = parse_ts(op["startTime"])
+            e = parse_ts(op["endTime"]) if op.get("endTime") else int(time.time())
+        except (KeyError, ValueError):
+            continue
+        spans.append((s - a.alignment, e + a.alignment))
+        rows.append({"operation": op.get("name", ""), "node_pool": base(tl) if "/nodePools/" in tl else "",
+                     "status": op.get("status", ""), "start": fmt_epoch(s), "end": fmt_epoch(e)})
+    excluded = {w for w in windows for s, e in spans if s <= w <= e}
+    return excluded, rows
+
+
+# --------------------------------------------------------------------------- step 3
+def autoscaler_events(a):
+    flt = (f'resource.type="k8s_cluster" AND resource.labels.cluster_name="{a.cluster}" '
+           f'AND resource.labels.location="{a.location}" AND log_id("{AUTOSCALER_LOG}") '
+           f'AND (jsonPayload.decision.scaleUp:* OR jsonPayload.decision.scaleDown:* '
+           f'OR jsonPayload.resultInfo:* OR jsonPayload.noDecisionStatus.noScaleUp:*)')
+    entries = run_json(["gcloud", "logging", "read", flt, f"--project={a.project}",
+                        f"--freshness={a.days}d", f"--limit={a.log_limit}", "--format=json"],
+                       allow_fail=True)
+    if entries is None:
+        return None, None
+    if len(entries) >= a.log_limit:
+        log(f"  ! hit --log-limit={a.log_limit}; older events not read - raise the limit")
+
+    agg = defaultdict(lambda: {"scale_up_events": 0, "nodes_requested": 0, "max_single_request": 0,
+                               "nodes_scaled_down": 0, "failed_scale_ups": Counter(),
+                               "no_scale_up_rejections": Counter(), "first": None, "last": None})
+    event_targets = {}
+    results = []
+
+    def touch(key, ts):
+        r = agg[key]
+        r["first"] = ts if r["first"] is None else min(r["first"], ts)
+        r["last"] = ts if r["last"] is None else max(r["last"], ts)
+
+    for e in entries:
+        jp = e.get("jsonPayload", {}) or {}
+        ts = parse_ts(e.get("timestamp", iso(datetime.now(timezone.utc))))
+        dec = jp.get("decision", {}) or {}
+        su = dec.get("scaleUp")
+        if su:
+            keys = []
+            for im in su.get("increasedMigs", []) or []:
+                mig = im.get("mig", {}) or {}
+                key = (mig.get("nodepool", "?"), mig.get("zone", "?"))
+                req = int(im.get("requestedNodes", 0) or 0)
+                agg[key]["scale_up_events"] += 1
+                agg[key]["nodes_requested"] += req
+                agg[key]["max_single_request"] = max(agg[key]["max_single_request"], req)
+                touch(key, ts)
+                keys.append(key)
+            if dec.get("eventId"):
+                event_targets[dec["eventId"]] = keys
+        sd = dec.get("scaleDown")
+        if sd:
+            for n in sd.get("nodesToBeRemoved", []) or []:
+                mig = (n.get("node", {}) or {}).get("mig", {}) or {}
+                key = (mig.get("nodepool", "?"), mig.get("zone", "?"))
+                agg[key]["nodes_scaled_down"] += 1
+                touch(key, ts)
+        for r in (jp.get("resultInfo", {}) or {}).get("results", []) or []:
+            em = r.get("errorMsg")
+            if em:
+                results.append((r.get("eventId"), em.get("messageId", "unknown"), ts))
+        nsu = (jp.get("noDecisionStatus", {}) or {}).get("noScaleUp")
+        if nsu:
+            for rm in nsu.get("rejectedMigs", []) or []:
+                mig = rm.get("mig", {}) or {}
+                key = (mig.get("nodepool", "?"), mig.get("zone", "?"))
+                reason = (rm.get("reason", {}) or {}).get("messageId", "unknown")
+                agg[key]["no_scale_up_rejections"][reason] += 1
+                touch(key, ts)
+
+    for event_id, msg, ts in results:
+        for key in event_targets.get(event_id, [("?", "?")]):
+            agg[key]["failed_scale_ups"][msg] += 1
+            touch(key, ts)
+
+    rows = []
+    for (pool, zone), r in sorted(agg.items()):
+        rows.append({"pool": pool, "zone": zone,
+                     "scale_up_events": r["scale_up_events"], "nodes_requested": r["nodes_requested"],
+                     "max_single_request": r["max_single_request"],
+                     "nodes_scaled_down": r["nodes_scaled_down"],
+                     "failed_scale_ups": "; ".join(f"{k}={v}" for k, v in r["failed_scale_ups"].items()),
+                     "no_scale_up_rejections": "; ".join(
+                         f"{k}={v}" for k, v in r["no_scale_up_rejections"].items()),
+                     "first_event": fmt_epoch(r["first"]), "last_event": fmt_epoch(r["last"])})
+    return rows, len(entries)
+
+
+# --------------------------------------------------------------------------- sizing
+def sizing_rows(shape_zone_stats, pools, pool_shape, a):
+    out = []
+    for (shape, zone), st in sorted(shape_zone_stats.items()):
+        members = [p for p in pools if pool_shape[p["pool"]] == shape
+                   and (not p["locations"] or zone in p["locations"].split(","))]
+        specific = any(p["reservation_affinity"] == "SPECIFIC_RESERVATION" for p in members)
+        surge = sum(p["max_surge"] for p in members) if (specific or a.include_surge) else 0
+        basis = st["peak_excl_upgrades"] or st["peak"]
+        sized = math.ceil(basis * (1 + a.growth_pct / 100)) + surge
+        note = []
+        if shape == "UNKNOWN":
+            note.append("unmapped nodes - not sizeable")
+        if "|SPOT" in shape:
+            note.append("Spot VMs cannot consume reservations")
+        if specific:
+            note.append("specific affinity: history is capped by the current reservation")
+        out.append({"shape": shape, "zone": zone, "pools": ",".join(p["pool"] for p in members),
+                    "peak_excl_upgrades": st["peak_excl_upgrades"], "peak": st["peak"],
+                    "growth_pct": a.growth_pct, "surge_headroom": surge,
+                    "sizing_input": sized if shape != "UNKNOWN" and "|SPOT" not in shape else "",
+                    "note": "; ".join(note)})
+    return out
+
+
+# --------------------------------------------------------------------------- main
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--project", required=True)
+    ap.add_argument("--cluster", required=True)
+    ap.add_argument("--location", required=True, help="cluster region (e.g. europe-west2) or zone")
+    ap.add_argument("--days", type=int, default=30, help="history window (default 30)")
+    ap.add_argument("--alignment", type=int, default=300,
+                    help="seconds per counting window (default 300; min 60)")
+    ap.add_argument("--chunk-days", type=int, default=7, help="days per Monitoring API request")
+    ap.add_argument("--log-limit", type=int, default=100000, help="max autoscaler log entries")
+    ap.add_argument("--kube-context", help="run kubectl cross-check ('current' or a context name)")
+    ap.add_argument("--growth-pct", type=float, default=0.0, help="growth %% added in sizing input")
+    ap.add_argument("--include-surge", action="store_true",
+                    help="add maxSurge headroom even for non-specific affinity pools")
+    ap.add_argument("--skip-monitoring", action="store_true")
+    ap.add_argument("--skip-logs", action="store_true")
+    ap.add_argument("--out-dir", help="output directory (default ./node-peaks-<cluster>-<ts>)")
+    a = ap.parse_args()
+    a.alignment = max(60, a.alignment)
+    region = region_of(a.location)
+    out = a.out_dir or f"node-peaks-{a.cluster}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    os.makedirs(out, exist_ok=True)
+    summary = {"project": a.project, "cluster": a.cluster, "location": a.location,
+               "days": a.days, "alignment_s": a.alignment, "generated": iso(datetime.now(timezone.utc))}
+
+    # ---- step 1
+    log("STEP 1: live inventory")
+    pools = describe_pools(a)
+    vms = list_vms(a, region)
+    vms_by_pool = defaultdict(list)
+    for v in vms:
+        vms_by_pool[v["pool"]].append(v)
+    pool_shape = {p["pool"]: shape_key(p, vms_by_pool) for p in pools}
+    for p in pools:
+        p["shape"] = pool_shape[p["pool"]]
+        p["live_nodes"] = len(vms_by_pool.get(p["pool"], []))
+
+    pool_cols = ["pool", "shape", "live_nodes", "locations", "autoscaling", "min_per_zone",
+                 "max_per_zone", "total_min", "total_max", "location_policy",
+                 "reservation_affinity", "reservation_values", "upgrade_strategy",
+                 "max_surge", "max_unavailable", "version"]
+    write_csv(f"{out}/node_pools.csv", pools, pool_cols)
+    print_table("Node pools", pools, ["pool", "shape", "live_nodes", "max_per_zone",
+                                      "reservation_affinity", "max_surge", "max_unavailable"])
+
+    vm_cols = ["name", "pool", "zone", "machine_type", "status", "min_cpu_platform", "cpu_platform",
+               "accelerators", "local_ssd_count", "local_ssd_interface", "provisioning",
+               "vm_reservation_affinity"]
+    write_csv(f"{out}/live_vms.csv", vms, vm_cols)
+    live = Counter((v["pool"], v["zone"], v["machine_type"], v["status"]) for v in vms)
+    live_rows = [{"pool": k[0], "zone": k[1], "machine_type": k[2], "status": k[3], "vms": n}
+                 for k, n in sorted(live.items())]
+    write_csv(f"{out}/live_counts_pool_zone.csv", live_rows,
+              ["pool", "zone", "machine_type", "status", "vms"])
+    print_table("Live VMs by pool / zone / machine type", live_rows,
+                ["pool", "zone", "machine_type", "status", "vms"])
+    mixed = [p for p, vs in vms_by_pool.items()
+             if len({(v["machine_type"], v["cpu_platform"]) for v in vs}) > 1]
+    if mixed:
+        log(f"  ! pools with mixed machine type / CPU platform live: {mixed}")
+    summary["live_vm_total"] = len(vms)
+
+    if a.kube_context:
+        nodes = list_k8s_nodes(a)
+        if nodes is not None:
+            vm_names, k8s_names = {v["name"] for v in vms}, {n["name"] for n in nodes}
+            xc = {"k8s_nodes": len(nodes), "vms": len(vm_names),
+                  "in_k8s_not_vm": sorted(k8s_names - vm_names),
+                  "vm_not_in_k8s": sorted(vm_names - k8s_names),
+                  "not_ready": sorted(n["name"] for n in nodes if n["ready"] != "True"),
+                  "cordoned": sorted(n["name"] for n in nodes if n["unschedulable"])}
+            summary["kubectl_crosscheck"] = xc
+            write_csv(f"{out}/k8s_nodes.csv", nodes,
+                      ["name", "pool", "zone", "machine_type", "ready", "unschedulable"])
+            print(f"\nkubectl cross-check: {xc['k8s_nodes']} nodes vs {xc['vms']} VMs; "
+                  f"in k8s not VM={len(xc['in_k8s_not_vm'])}, VM not in k8s={len(xc['vm_not_in_k8s'])}, "
+                  f"NotReady={len(xc['not_ready'])}, cordoned={len(xc['cordoned'])}")
+
+    # ---- step 2
+    if not a.skip_monitoring:
+        log("STEP 2: historical peaks from Cloud Monitoring")
+        presence, node_loc = fetch_presence(a, region)
+        windows = sorted(presence)
+        if not windows:
+            log("  ! no Monitoring data - check GKE system metrics are enabled and the filter")
+        else:
+            resolve = build_resolver(pools, vms)
+            node_map = {n: resolve(n, node_loc.get(n, "")) for n in node_loc}
+            methods = Counter(m for _, _, m in node_map.values())
+            summary["history"] = {"first_window": fmt_epoch(windows[0]),
+                                  "last_window": fmt_epoch(windows[-1]),
+                                  "windows": len(windows), "distinct_nodes": len(node_map),
+                                  "node_mapping": dict(methods)}
+            if methods.get("heuristic") or methods.get("unmapped"):
+                log(f"  ! node mapping: {dict(methods)} - see node_mapping.csv")
+            write_csv(f"{out}/node_mapping.csv",
+                      [{"node": n, "pool": p, "zone": z, "method": m, "monitoring_location": node_loc[n]}
+                       for n, (p, z, m) in sorted(node_map.items())],
+                      ["node", "pool", "zone", "method", "monitoring_location"])
+
+            excluded, ops_rows = upgrade_windows(a, windows)
+            summary["history"]["upgrade_windows_excluded"] = len(excluded)
+            write_csv(f"{out}/upgrade_operations.csv", ops_rows,
+                      ["operation", "node_pool", "status", "start", "end"])
+
+            series = count_windows(presence, node_map, pool_shape)
+            stat_cols = ["peak", "peak_time", "peak_excl_upgrades", "peak_excl_upgrades_time",
+                         "p95", "mean", "min"]
+            names = {"pool_zone": ["pool", "zone"], "shape_zone": ["shape", "zone"],
+                     "pool": ["pool"], "zone": ["zone"], "shape": ["shape"], "cluster": ["scope"]}
+            shape_zone_stats = {}
+            for dim in DIMS:
+                rows = []
+                for key, by_w in sorted(series[dim].items()):
+                    st = summarise(by_w, windows, excluded)
+                    if dim == "shape_zone":
+                        shape_zone_stats[key] = st
+                    rows.append({**dict(zip(names[dim], key)), **st})
+                write_csv(f"{out}/peaks_by_{dim}.csv", rows, names[dim] + stat_cols)
+                if dim in ("pool_zone", "shape_zone", "cluster"):
+                    print_table(f"Peaks by {dim.replace('_', ' / ')}", rows,
+                                names[dim] + ["peak", "peak_excl_upgrades", "p95", "mean",
+                                              "peak_excl_upgrades_time"])
+
+            ts_rows = [{"window_utc": fmt_epoch(w), "pool": k[0], "zone": k[1], "nodes": by_w.get(w, 0)}
+                       for k, by_w in sorted(series["pool_zone"].items()) for w in windows]
+            write_csv(f"{out}/timeseries_pool_zone.csv", ts_rows, ["window_utc", "pool", "zone", "nodes"])
+
+            sz = sizing_rows(shape_zone_stats, pools, pool_shape, a)
+            write_csv(f"{out}/sizing_input_shape_zone.csv", sz,
+                      ["shape", "zone", "pools", "peak_excl_upgrades", "peak", "growth_pct",
+                       "surge_headroom", "sizing_input", "note"])
+            print_table("Sizing input per shape / zone (peak excl. upgrades x growth + surge)", sz,
+                        ["shape", "zone", "peak_excl_upgrades", "surge_headroom",
+                         "sizing_input", "note"])
+
+    # ---- step 3
+    if not a.skip_logs:
+        log("STEP 3: cluster autoscaler visibility logs")
+        rows, n = autoscaler_events(a)
+        if rows is not None:
+            summary["autoscaler_log_entries"] = n
+            cols = ["pool", "zone", "scale_up_events", "nodes_requested", "max_single_request",
+                    "nodes_scaled_down", "failed_scale_ups", "no_scale_up_rejections",
+                    "first_event", "last_event"]
+            write_csv(f"{out}/autoscaler_events_pool_zone.csv", rows, cols)
+            print_table("Autoscaler activity by pool / zone", rows,
+                        ["pool", "zone", "scale_up_events", "nodes_requested", "max_single_request",
+                         "nodes_scaled_down", "failed_scale_ups"])
+
+    with open(f"{out}/summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"\nOutputs written to: {os.path.abspath(out)}")
+
+
+if __name__ == "__main__":
+    main()
