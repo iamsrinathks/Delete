@@ -1,0 +1,40 @@
+Thanks. These screenshots point to the **same fail-open as NW-14**, and possibly worse, but I can't mark NG-12 Pass or Fail yet. **The `!` command check (step 4) and `/sandbox status` aren't in the screenshots**, and those are what prove whether commands actually ran unsandboxed.
+
+**What the screenshots show**
+
+| Variant | What the CLI showed | Status bar | Initial reading |
+| --- | --- | --- | --- |
+| **12a `#` comment / 12b trailing comma** (invalid JSON) | Red errors: *"settings.json is invalid"*, *"Could not load outgoing connections"*, *"Session-creation policy update was not acknowledged"* | **No "sandbox enabled"** | 🔴 **Likely fail-open.** The whole file is ignored |
+| **12c `"allowBypass": "no"`** | *"Some settings need attention"*. Problems tab: *"`sandbox` has an invalid value and **has no effect**: sandbox.allowBypass: Expected boolean, received string"* | Not visible | 🔴 **Same as NW-14.** One wrong value type disables the whole `sandbox` section |
+| **Restored** | No warnings | **sandbox enabled** | ✅ |
+
+- **The `/sandbox` dialog** said *"Cannot save sandbox settings while settings.json is invalid"*, but still showed **"Enable sandbox for this session ✓"**. That's why we need the `!` check: it shows whether the session **actually** ran sandboxed.
+- **I can't tell which screenshot is 12a and which is 12b.** Both are invalid JSON, so I expect the same result.
+
+**Rerun only the proof step (about 5 minutes)**
+
+**12a: 🖥 TEST**
+```powershell
+$f="$env:USERPROFILE\.copilot\settings.json"; Copy-Item $f "$f.ng12" -Force; $c=Get-Content $f -Raw; Set-Content $f ($c -replace '^\s*\{', "{`n  # ng12 comment") -Encoding UTF8
+```
+**🟢 ON:** `/exit`, `copilot`, `/sandbox status`, then:
+```text
+!"PROXY=$env:HTTPS_PROXY"; "CA=$env:CURL_CA_BUNDLE"; Set-Content C:\SbxTest\outside\ng12.txt x; Test-Path C:\SbxTest\outside\ng12.txt
+```
+
+**12c: 🖥 TEST**
+```powershell
+$f="$env:USERPROFILE\.copilot\settings.json"; Copy-Item "$f.ng12" $f -Force; Remove-Item C:\SbxTest\outside\ng12.txt -ErrorAction SilentlyContinue; $c=Get-Content $f -Raw; Set-Content $f ($c -replace '"allowBypass":\s*false', '"allowBypass": "no"') -Encoding UTF8
+```
+**🟢 ON:** `/exit`, `copilot`, `/sandbox status`, then the same `!` command.
+
+**Restore: 🖥 TEST**
+```powershell
+$f="$env:USERPROFILE\.copilot\settings.json"; Copy-Item "$f.ng12" $f -Force; Remove-Item "$f.ng12"; Remove-Item C:\SbxTest\outside\ng12.txt -ErrorAction SilentlyContinue
+```
+
+**How to read the `!` result**
+- **"(sandboxed)", PROXY has a value, "Access is denied", `False`** → the sandbox stayed on. ✅
+- **No label, PROXY empty, `True`** → 🔴 **critical fail-open.** A typo in a user's settings file switches the sandbox off.
+
+Send the 4 screenshots: `/sandbox status` and the `!` output, for 12a and for 12c. Then I'll write up NG-12 with all the evidence, and we'll do NG-05 in WSL.
