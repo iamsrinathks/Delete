@@ -1,11 +1,37 @@
-Still needed for CR-05: the CR-03 hash command in this session. That confirms git credential is EMPTY and shows whether GH_TOKEN is still a placeholder while gh authentication is on:
+**CR-05 is complete and passes.** With git credentials off:
+- `git credential` = **EMPTY**.
+- gh still gets a **placeholder** (`dad6c9d7a65b`, length 49).
+- The push failed with "unable to get password". ✅
 
-text
+**Why the TEST window failed**
+1. **`Set-Sbx` isn't defined in this window.** A function only exists in the window where you ran it. (You must have edited CR-05 by hand, which is fine.)
+2. **`main` doesn't exist locally.** The repo was cloned empty, so your first commit went onto `sbx-on-1`. Ignore it. **The branch doesn't matter for the remaining tests.**
+
+**Run these in 🖥 TEST.** First define the helper, all on one line:
+```powershell
+function Set-Sbx($k,$v){ $f="$env:USERPROFILE\.copilot\settings.json"; $j=Get-Content $f -Raw|ConvertFrom-Json; $o=$j.sandbox; $p=$k.Split('.'); for($i=0;$i -lt $p.Count-1;$i++){ if(-not $o.($p[$i])){ $o|Add-Member $p[$i] ([pscustomobject]@{}) -Force }; $o=$o.($p[$i]) }; $o|Add-Member $p[-1] $v -Force; $j|ConvertTo-Json -Depth 20|Set-Content $f -Encoding UTF8; "sandbox.$k = $v" }
+```
+Then set up CR-06:
+```powershell
+Set-Sbx 'auth.git' $true; Set-Sbx 'auth.gh' $false
+```
+- **Expected output:**
+  ```text
+  sandbox.auth.git = True
+  sandbox.auth.gh = False
+  ```
+
+**Then in 🟢 ON:**
+1. Type `/exit`, then `copilot`, then `/sandbox policy`. Check **Authenticate gh: off**, **Authenticate git: on** and **sandbox enabled**.
+2. Run:
+```text
+!gh api user --jq .login
+```
+3. Run:
+```text
 !$H = { param($n,$s) if (-not $s) { "$n = EMPTY" } else { $s = "$s".Trim(); $x = -join ([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($s))[0..5] | ForEach-Object { $_.ToString('x2') }); "$n = $($s.Substring(0,[Math]::Min(4,$s.Length)))… len $($s.Length) hash $x" } }; & $H 'gh auth token' (gh auth token); & $H 'GH_TOKEN' $env:GH_TOKEN; & $H 'git credential' (("protocol=https`nhost=github.com`n`n" | git credential fill 2>$null | Select-String '^password=') -replace '^password=','')
+```
 
-Then go to CR-06 (🖥 TEST window):
-
-powershell
-git switch main; Set-Sbx 'auth.git' $true; Set-Sbx 'auth.gh' $false
-If the TEST window says Set-Sbx is not recognized, it was opened again after you ran Step 0. Re-run the Step 0 helper line first.
-Then in 🟢 ON: /exit, copilot, /sandbox policy, followed by the two CR-06 ! commands.
+**Expected**
+- `gh` is **not logged in**. `GH_TOKEN` = EMPTY.
+- 🔴 If any line shows the real hash **`6edbf1466d5e`**, that's a critical finding.
