@@ -1,35 +1,33 @@
-**CR-06 passes, and there's a useful side finding.** With `auth.gh: false`:
-- `GH_TOKEN` = **EMPTY** and `gh auth token` = **EMPTY**.
-- `git credential` = **EMPTY**.
-- **None of your real credentials are reachable.** ✅
+Nearly there, but **CR-15 isn't proven yet**. The `(keyring)` result came from the **TEST window**, which is outside Copilot. The test needs a command **inside Copilot** that is approved to **bypass** the sandbox.
 
-**Side finding: with gh authentication off, `gh` doesn't start at all**
-- The error is *"failed to read configuration: open …\GitHub CLI\config.yml: Access is denied"*.
-- **My reading of this:** when `auth.gh` is on, the sandbox seems to give `gh` its placeholder token **and** read access to its config folder. When it's off, that folder is blocked (it's under your home folder, like FS-06). So `gh` **fails at startup**, even for commands that don't need sign-in.
-- **Effect:** turning off gh authentication = **no gh in the sandbox at all**, not just "gh signed out". Fine for a locked-down policy, but worth noting in the user FAQ.
+**What we have so far**
 
-**Last test: CR-15 (bypass)**
+| Where | `gh auth status` says | Token |
+| --- | --- | --- |
+| 🟢 ON, sandboxed | Logged in **(GH_TOKEN)** | `gho_` + **45 stars**, the 49-character placeholder |
+| 🖥 TEST, no Copilot | Logged in **(keyring)** | `gho_` + **36 stars**, the real 40-character token |
+| 🟢 ON, **bypassed** | ❓ not run yet | — |
 
-1. **🖥 TEST:**
+This is useful already: **you can tell the placeholder from the real token by its length**, even when it's masked.
+
+**To finish CR-15**
+
+1. **🖥 TEST.** You've set bypass back to false, so turn it on again:
 ```powershell
-Set-Sbx 'auth.git' $true; Set-Sbx 'auth.gh' $true; Set-Sbx 'allowBypass' $true
+Set-Sbx 'allowBypass' $true
 ```
-2. **🟢 ON:** `/exit`, then `copilot`, then `/sandbox policy`. Check **Allow sandbox bypass: yes**. Take a screenshot.
-3. **🟢 ON**, sandboxed run for comparison:
-```text
-!gh auth status
-```
-4. **🟢 ON**, ask the model (no `!`):
+2. **🟢 ON:** `/exit`, then `copilot`. Check `/sandbox policy` shows **Allow sandbox bypass: yes**.
+3. **🟢 ON:** type this to the **model** (no `!`):
 ```text
 Run the command "gh auth status" outside the sandbox. Request a sandbox bypass for it. Show the full output.
 ```
-   - **Approve the bypass prompt once.** Take a screenshot of the prompt and of the output.
-5. **🖥 TEST, straight away:**
+   - A **bypass approval prompt** should appear. Take a screenshot, then **approve it once**.
+   - Take a screenshot of the output. **Expected:** **(keyring)** and 36 stars. The real login reaches the agent.
+   - If the model **refuses**, or runs it **sandboxed** without asking, take a screenshot and tell me. That would be a finding too.
+4. **🖥 TEST, straight away:**
 ```powershell
 Set-Sbx 'allowBypass' $false
 ```
+   Then in **🟢 ON**: `/exit`, then `copilot`. Check that `/sandbox policy` shows **bypass: no**.
 
-**Expected**
-- **Sandboxed** `gh auth status`: logged in using **`GH_TOKEN`**, the placeholder.
-- **Bypassed:** logged in from the **keyring**, your real stored login.
-- That proves a bypass **skips credential masking**. It's why `allowBypass` must be `false` in the fleet.
+After that, Procedure B is done, and I'll add **all the CR evidence** to the doc.
