@@ -1,51 +1,31 @@
-# App RTL Project Structure
+**First result: in Session ON, `GH_TOKEN` is set inside the sandbox** (`gho_…`, length **49**). A normal `gho_` token is **40** characters, so this is **very likely the placeholder**. We still need the real hash to confirm.
 
-## Overview
+**Two problems to fix first**
 
-Any application development initiative that adheres to the standard SDLC can benefit from deployment within the App RTL framework. This encompasses a wide range of products and services, including but not limited to:
+**1. `gh` isn't found inside the sandbox.**
+- **Most likely cause:** this Copilot window was opened **before** you installed `gh`, so its PATH is out of date.
+  1. **Close this terminal window completely** and open a new one.
+  2. Run `cd C:\SbxTest\repo\sbx-cred-test`, then `copilot`.
+  3. Run `!gh --version`.
+- **If `gh` still isn't found,** in the **test window** run:
+  ```powershell
+  (Get-Command gh).Source
+  ```
+  If the path is under `AppData\Local\Microsoft\WinGet\...`, the sandbox probably **can't read that folder**. That's a finding in its own right: **a per-user winget install of gh doesn't work in the sandbox.** A machine-wide install (MSI or Intune) under `C:\Program Files\GitHub CLI` would.
 
-The App RTL Project Structure is designed to optimize the utilization of Google Cloud Platform (GCP) resources for testing purposes across three teams: A, B, and C. By provisioning GCP projects via Backstage and implementing a structured allocation strategy, we aim to enhance resource management, ensure efficient testing workflows, and maintain control over network configurations.
+**2. The test-window command failed because of a copy error.**
+- You copied it from the Copilot screen, so it picked up the labels **"(sandboxed) 11 lines"**.
+- Copy this **clean line** instead and paste it into the **test window** (plain PowerShell, no `!`):
+```powershell
+$H = { param($n,$s) if (-not $s) { "$n = EMPTY" } else { $s = "$s".Trim(); $x = -join ([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($s))[0..5] | ForEach-Object { $_.ToString('x2') }); "$n = $($s.Substring(0,[Math]::Min(4,$s.Length)))… len $($s.Length) hash $x" } }; & $H 'gh auth token' (gh auth token); & $H 'GH_TOKEN' $env:GH_TOKEN; & $H 'GITHUB_TOKEN' $env:GITHUB_TOKEN; & $H 'git credential' (("protocol=https`nhost=github.com`n`n" | git credential fill 2>$null | Select-String '^password=') -replace '^password=','')
+```
 
-## Project Allocation Strategy
+**What to compare**
 
-To effectively manage the deployment limit of 25 projects per template, the following allocation has been proposed:
+| Value | Session ON (so far) | Test window (real) | Pass if |
+| --- | --- | --- | --- |
+| `GH_TOKEN` | `gho_` len 49, hash `9fe92db35e2e` | probably EMPTY | ON is a placeholder: the hash differs from the real `gh auth token` hash |
+| `gh auth token` | (gh not found) | `gho_…` len 40, hash ? | ON hash ≠ real hash |
+| `git credential` | EMPTY | real hash | ON stays EMPTY (Credential Manager not reachable) ✅ |
 
-- **Team-Specific Projects:**
-  - **Development (Dev):** Each team (A, B, and C) is allocated 5 projects, totaling 15 projects.
-  - **Pre-Production (Pre):** Each team is allocated 2 projects, totaling 6 projects.
-
-- **Networking Host Projects:**
-  - **Host Projects:** 1 project per environment (Dev and Pre) dedicated to networking, where subnets and firewall rules will be managed, totaling 2 projects.
-
-- **Idle Projects:**
-  - **Reserve:** 2 projects remain idle and can be utilized by any team as needed, especially when awaiting the cleanup of resources in their allocated projects.
-
-This allocation sums up to 25 projects, aligning with the current deployment limit.
-
-## Networking and Subnet Management
-
-Effective subnet management is crucial to prevent IP address conflicts and ensure seamless communication between resources. To achieve this:
-
-- **Centralized Control:** The dedicated networking host projects will centrally manage subnets and firewall rules, providing a unified approach to network configuration.
-
-- **Subnet Allocation:** Each team's projects will be assigned specific subnet ranges to avoid overlaps. This structured allocation facilitates better control and predictability of network resources.
-
-Implementing a centralized networking model, such as Google's Shared VPC, allows multiple projects to connect to a common VPC network, enhancing security and efficiency. citeturn0search3
-
-## Roles and Responsibilities
-
-- **Project Ownership:** Each project will have an assigned owner responsible for overseeing resource provisioning, usage, and cleanup within their respective projects.
-
-- **Resource Cleanup:** Given the testing nature of these projects, it's imperative to clean up resources post-testing to free up capacity for future tests.
-
-## Importance of This Approach
-
-- **Resource Optimization:** By allocating a fixed number of projects per team and environment, we ensure optimal utilization of available GCP projects within the deployment limits.
-
-- **Network Consistency:** Centralized subnet and firewall management prevent IP conflicts and promote a consistent networking environment across all projects.
-
-- **Scalability and Flexibility:** The reserve of idle projects provides flexibility, allowing teams to continue testing without delays during resource cleanup periods.
-
-- **Accountability:** Assigning project owners fosters responsibility and ensures that resources are managed effectively, aligning with best practices for resource hierarchy and management in GCP. citeturn0search2
-
-By implementing this structured approach, we can enhance our testing workflows, maintain control over our GCP resources, and ensure a streamlined, efficient process for all teams involved. 
+Send the test-window output and the result of `!gh --version` after the restart. Then we'll carry on with CR-02, CR-04, CR-11 and CR-01.
