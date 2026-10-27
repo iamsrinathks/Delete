@@ -460,7 +460,7 @@ const DOC = [
 ];
 
 let sets = [];
-let tab = "peaks";
+let tab = "mtypes";
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const num = v => (v === "" || v === null || v === undefined || isNaN(+v)) ? null : +v;
@@ -846,11 +846,34 @@ function table(cols, rows){
                  : `<tr><td colspan="${cols.length}">No data.</td></tr>`) + `</tbody></table>`;
 }
 function renderTabs(d, cur){
-  const tabs = [["peaks", "Peaks by pool and zone"], ["autoscaler", "Autoscaler activity"], ["pools", "Node pools"]];
+  const tabs = [["mtypes", "Machine types → node pools"], ["peaks", "Peaks by pool and zone"], ["autoscaler", "Autoscaler activity"], ["pools", "Node pools"]];
   $("tabs").innerHTML = tabs.map(([k, l]) => `<button type="button" role="tab" aria-selected="${k === tab}" data-tab="${k}">${esc(l)}</button>`).join("");
   $("tabs").querySelectorAll("button").forEach(b => b.onclick = () => { tab = b.dataset.tab; renderTabs(d, cur); });
   let html = "";
-  if (tab === "peaks") {
+  if (tab === "mtypes") {
+    /* One row per machine shape: which node pools use it, with running VMs per zone. */
+    const names = (d.pools || []).map(p => p.pool);
+    const zones = [...new Set((d.live || []).map(r => r.zone))].sort();
+    const liveBy = {}; (d.live || []).forEach(r => { if (r.status === "RUNNING") { const k = r.pool + "|" + r.zone; liveBy[k] = (liveBy[k] || 0) + (+r.vms || 0); } });
+    const peakBy = {}; (((d.peaks || {}).pool) || []).forEach(r => peakBy[r.pool] = r.peak);
+    const groups = {};
+    (d.pools || []).filter(p => passes(p.shape)).forEach(p => (groups[p.shape] = groups[p.shape] || []).push(p));
+    const catLabel = { cpu: "CPU – predefined", custom: "CPU – custom", gpu: "GPU", other: "Other" };
+    let body = "";
+    Object.keys(groups).sort().forEach(shape => {
+      const ps = groups[shape].sort((a, b) => a.pool.localeCompare(b.pool));
+      const tot = {}; let all = 0;
+      ps.forEach((p, i) => {
+        const cells = zones.map(z => { const v = liveBy[p.pool + "|" + z] || 0; tot[z] = (tot[z] || 0) + v; all += v; return `<td class="n c-cur">${v || ""}</td>`; }).join("");
+        const sum = zones.reduce((a, z) => a + (liveBy[p.pool + "|" + z] || 0), 0);
+        body += `<tr>${i === 0 ? `<td rowspan="${ps.length + (ps.length > 1 ? 1 : 0)}"><b>${esc(shortShape(shape))}</b><br><span class="sub">${esc(catLabel[catOf(shape)])}${p.vm_machine_type && p.vm_machine_type !== shape.split("|")[0] ? "" : ""}</span></td>` : ""}` +
+          `<td>${esc(shortPool(p.pool, names))}</td>${cells}<td class="n c-cur"><b>${sum}</b></td><td class="n c-peak">${peakBy[p.pool] ?? ""}</td><td>${esc(p.reservation_affinity || "")}</td></tr>`;
+      });
+      if (ps.length > 1) body += `<tr class="sub"><td>All pools on this type</td>${zones.map(z => `<td class="n c-cur">${tot[z] || ""}</td>`).join("")}<td class="n c-cur">${all}</td><td></td><td></td></tr>`;
+    });
+    html = `<table><thead><tr><th>Machine type</th><th>Node pool</th>${zones.map(z => `<th class="n">Running ${esc(zoneTail(z))}</th>`).join("")}<th class="n">Running total</th><th class="n">Pool peak</th><th>Affinity</th></tr></thead><tbody>${body || `<tr><td colspan="${zones.length + 5}">No node pools match this filter.</td></tr>`}</tbody></table>` +
+      `<p class="sub" style="margin-top:8px">Pools on the same machine type in the same zone share one reservation, if the full shape matches. Pool peak is the pool's highest node count across all zones at the same moment.</p>`;
+  } else if (tab === "peaks") {
     const shp = {}; (d.pools || []).forEach(p => shp[p.pool] = p.shape);
     const rows = ((d.peaks || {}).pool_zone || []).filter(r => passes(shp[r.pool] || "UNKNOWN")).map(r => ({...r, current: cur[r.pool + "|" + r.zone] || 0}));
     html = table([{h:"Pool",k:"pool"},{h:"Zone",k:"zone"},{h:"Current",k:"current",n:1},{h:"P95",k:"p95",n:1},{h:"Peak",k:"peak",n:1},{h:"Peak w/o upgrades",k:"peak_excl_upgrades",n:1},{h:"Mean",k:"mean",n:1},{h:"Min",k:"min",n:1},{h:"Peak time",k:"peak_time"}], rows);
