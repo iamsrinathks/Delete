@@ -1,0 +1,34 @@
+Good progress: the **sidecar is installed** and **Node is at `C:\Program Files\nodejs\node.exe`**. The error is only because the **`< >` placeholders were typed literally**. They're there for you to replace with real values, without the angle brackets.
+
+**Step 1: Find the helper script inside the sidecar**
+```powershell
+$pkg = Join-Path (npm root -g) "@schroders\claude-code"
+$pkg
+Get-Content "$pkg\package.json" | ConvertFrom-Json | Select-Object name, version, bin, main
+Get-ChildItem $pkg -Recurse -Filter *.js -Exclude *.test.js |
+  Where-Object FullName -notmatch "node_modules\\.+node_modules" |
+  Select-Object -First 30 FullName
+```
+- **`bin`** shows which `.js` file the **`schroders-claude`** command runs. That's the entry point.
+- **Compare with Andy's config:** look at the **file name at the end** of his `otelHeadersHelper` line (`/usr/local/share/nvm/.../<something>.js`) and find the same file in the list.
+- **Share the `bin` output and the file list** (no secrets in them) if it's unclear which one to use.
+
+**Step 2: Test the helper (real paths, no `< >`)**
+- **If Andy's helper is a dedicated headers script**, e.g. `...\otel-headers.js`:
+```powershell
+& "C:\Program Files\nodejs\node.exe" "$pkg\<actual\relative\path>.js"
+```
+- **If the helper is the CLI itself** (the `bin` entry) with a sub-command, e.g. `token` as Andy suggested:
+```powershell
+& "C:\Program Files\nodejs\node.exe" "$pkg\<bin file>.js" token
+```
+- **Expected:** either a **JSON line** like `{"Authorization":"Bearer ..."}`, or a **raw token** (which needs a small wrapper).
+- **First run might open a browser or ask you to sign in.** That's normal; complete it once.
+
+**What to send me** (redact the token after the first ~20 characters)
+- The output of **`package.json` → `bin`**.
+- The **output format** from Step 2: **JSON headers** or a **raw token**.
+
+Then I'll give you the exact `telemetry` block for `%USERPROFILE%\.copilot\settings.json`:
+- **If it's JSON:** `path` = `node.exe`, `args` = `[script, ...]`. No wrapper needed.
+- **If it's a raw token:** a 3-line PowerShell wrapper that turns it into `{"Authorization":"Bearer ..."}`.
