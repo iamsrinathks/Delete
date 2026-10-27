@@ -1,1 +1,6 @@
 echo 'export PATH="$(brew --prefix)/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc && which kubectx
+
+
+
+ifconfig | grep "inet " | grep -v 127.0.0.1 | cut -d\  -f2
+
