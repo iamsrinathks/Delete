@@ -1,0 +1,1 @@
+echo 'export PATH="$(brew --prefix)/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc && which kubectx
