@@ -1,0 +1,18 @@
+{
+  "telemetry": {
+    "enabled": true,
+    "endpoint": "https://prd.int.api.**.com/anthropic/claude-code/telemetry",
+    "protocol": "http/json",
+    "captureContent": false,
+    "headersProvider": {
+      "path": "C:\\Program Files\\nodejs\\node.exe",
+      "args": [
+        "C:\\src\\npm-global\\node_modules\\@**\\claude-code\\bin\\**-claude.js",
+        "otel-headers"
+      ],
+      "refreshIntervalMs": 1080000
+    }
+  }
+}
+
+C:\Program Files\GitHubCopilot\managed-settings.json (same as %ProgramFiles%\GitHubCopilot\managed-settings.json
