@@ -28,7 +28,9 @@ import csv
 import json
 import math
 import os
+import platform
 import re
+import ssl
 import subprocess
 import sys
 import time
@@ -38,7 +40,7 @@ import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
-SCRIPT_VERSION = "2026-10-26.8"
+SCRIPT_VERSION = "2026-10-27.1"
 METRIC = "kubernetes.io/node/cpu/allocatable_cores"   # one series per node (k8s_node)
 AUTOSCALER_LOG = "container.googleapis.com/cluster-autoscaler-visibility"
 ZONE_RE = re.compile(r"^[a-z]+-[a-z]+\d+-[a-z]$")      # e.g. europe-west2-a
@@ -345,25 +347,91 @@ class Token:
         return self.tok
 
 
-def setup_proxy():
-    """urllib does not read gcloud's proxy settings. Reuse them (or HTTPS_PROXY) if set."""
-    if os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy"):
-        log(f"  using HTTPS_PROXY={os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')}")
-        return
-    def cfg(key):
+def gcloud_cfg(key):
+    try:
+        return subprocess.run(["gcloud", "config", "get-value", key], capture_output=True,
+                              text=True, timeout=30).stdout.strip()
+    except Exception:
+        return ""
+
+
+def macos_keychain_pems():
+    """Root/intermediate certs from the macOS keychains. Corporate TLS-inspection roots
+    (Zscaler, Netskope, ...) are normally installed here by MDM; Python does not read them."""
+    chains = ["/System/Library/Keychains/SystemRootCertificates.keychain",
+              "/Library/Keychains/System.keychain",
+              os.path.expanduser("~/Library/Keychains/login.keychain-db")]
+    pems = []
+    for kc in chains:
+        if not os.path.exists(kc):
+            continue
         try:
-            return subprocess.run(["gcloud", "config", "get-value", key], capture_output=True,
-                                  text=True, timeout=30).stdout.strip()
+            out = subprocess.run(["security", "find-certificate", "-a", "-p", kc],
+                                 capture_output=True, text=True, timeout=60).stdout
         except Exception:
-            return ""
-    addr, port = cfg("proxy/address"), cfg("proxy/port")
-    if addr:
-        user, pwd = cfg("proxy/username"), cfg("proxy/password")
-        auth = f"{urllib.parse.quote(user)}:{urllib.parse.quote(pwd)}@" if user else ""
-        proxy = f"http://{auth}{addr}{':' + port if port else ''}"
-        urllib.request.install_opener(urllib.request.build_opener(
-            urllib.request.ProxyHandler({"https": proxy, "http": proxy})))
-        log(f"  using gcloud proxy {addr}{':' + port if port else ''}")
+            continue
+        pems += [c + "-----END CERTIFICATE-----\n" for c in out.split("-----END CERTIFICATE-----") if "BEGIN" in c]
+    return pems
+
+
+def build_ssl_context(a):
+    """Certificate verification always stays ON. Trust sources, first match wins:
+    --ca-bundle, SSL_CERT_FILE / REQUESTS_CA_BUNDLE / CURL_CA_BUNDLE, gcloud
+    core/custom_ca_certs_file; otherwise system defaults + macOS keychains + certifi."""
+    cands = [("--ca-bundle", getattr(a, "ca_bundle", None))]
+    cands += [(env, os.environ.get(env)) for env in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE")]
+    cands.append(("gcloud core/custom_ca_certs_file", gcloud_cfg("core/custom_ca_certs_file")))
+    for label, path in cands:
+        if not path:
+            continue
+        if os.path.isfile(path):
+            log(f"  TLS: trusting CA bundle from {label}: {path}")
+            return ssl.create_default_context(cafile=path)
+        log(f"  ! TLS: {label} points to a missing file: {path}")
+    ctx = ssl.create_default_context()
+    added = 0
+    if platform.system() == "Darwin":
+        for pem in macos_keychain_pems():
+            try:
+                ctx.load_verify_locations(cadata=pem)
+                added += 1
+            except ssl.SSLError:
+                pass                     # skip expired/odd entries, keep the rest
+        log(f"  TLS: added {added} certificate(s) from macOS keychains")
+    try:
+        import certifi                   # optional
+        ctx.load_verify_locations(cafile=certifi.where())
+    except Exception:
+        pass
+    return ctx
+
+
+def setup_network(a):
+    """urllib ignores gcloud's proxy and CA settings - apply them (or env vars) here."""
+    handlers = [urllib.request.HTTPSHandler(context=build_ssl_context(a))]
+    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    if proxy:
+        log(f"  using HTTPS_PROXY={proxy}")
+    else:
+        addr, port = gcloud_cfg("proxy/address"), gcloud_cfg("proxy/port")
+        if addr:
+            user, pwd = gcloud_cfg("proxy/username"), gcloud_cfg("proxy/password")
+            auth = f"{urllib.parse.quote(user)}:{urllib.parse.quote(pwd)}@" if user else ""
+            proxy = f"http://{auth}{addr}{':' + port if port else ''}"
+            handlers.append(urllib.request.ProxyHandler({"https": proxy, "http": proxy}))
+            log(f"  using gcloud proxy {addr}{':' + port if port else ''}")
+    urllib.request.install_opener(urllib.request.build_opener(*handlers))
+
+
+TLS_HELP = """ERROR: TLS certificate verification failed for monitoring.googleapis.com.
+Your network inspects HTTPS (corporate proxy), and Python does not trust its root certificate.
+gcloud works because it has its own CA settings. Fix it with ONE of these, then re-run:
+  1. Export your company root CA (Keychain Access > System > the Zscaler/Netskope/company root
+     > File > Export Items > .pem) and run with:  --ca-bundle ~/corp-root.pem
+  2. Or reuse gcloud's bundle if set:  gcloud config get-value core/custom_ca_certs_file
+  3. Or:  export SSL_CERT_FILE=/path/to/bundle.pem
+  4. python.org Python on macOS: run "Install Certificates.command" in /Applications/Python 3.x/
+Do NOT disable certificate verification."""
 
 
 def http_get_json(url, tok, timeout=90):
@@ -389,6 +457,8 @@ def http_get_json(url, tok, timeout=90):
                 continue
             sys.exit(f"ERROR: Monitoring API HTTP {e.code}: {body}")
         except urllib.error.URLError as e:
+            if isinstance(getattr(e, "reason", None), ssl.SSLCertVerificationError):
+                sys.exit(TLS_HELP + f"\nDetail: {e.reason}")
             wait = 2 ** attempt
             log(f"  ! network error {e.reason}, retrying in {wait}s")
             time.sleep(wait)
@@ -423,7 +493,7 @@ def fetch_counts(a, region, resolve, pool_shape):
     """Streams Cloud Monitoring per-node series and counts nodes per window and group.
     Memory grows with groups x windows, not nodes x windows."""
     tok = Token()
-    setup_proxy()
+    setup_network(a)
     preflight(a, region, tok)
     al = a.alignment
     t_start, n_chunks = time.time(), 0
@@ -717,6 +787,7 @@ def main():
     ap.add_argument("--alignment", type=int, default=300,
                     help="seconds per counting window (default 300; min 60)")
     ap.add_argument("--chunk-days", type=int, default=1, help="days per Monitoring API request (default 1)")
+    ap.add_argument("--ca-bundle", help="PEM file with your corporate root CA (TLS inspection proxies)")
     ap.add_argument("--page-size", type=int, default=100000,
                     help="max data POINTS per Monitoring API page with view=FULL "
                          "(API maximum and default 100000)")
