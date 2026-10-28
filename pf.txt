@@ -1,0 +1,119 @@
+**The ask, in short:** He needs to open the **Neo4j Browser UI** for the Neo4j database running in the cluster, but he can't use the normal method because he has **no Kubernetes access and no dev container**. SG wants to know if there's a **workaround**.
+
+- **What the normal method looks like**
+  - `kubectl port-forward svc/neo4j` in the **`indykite` namespace** tunnels two ports to his laptop:
+    - **7474**: Neo4j Browser (the web UI at `http://localhost:7474`)
+    - **7687**: **Bolt** protocol, which the browser UI uses to actually run queries
+  - The **password** is stored in the K8s secret **`indykite-auth`**, key **`NEO4J_AUTH`**. It's saved as `neo4j/<password>`, so the command base64-decodes it and `cut` keeps only the part after the `/`.
+
+- **Why He is stuck**
+  - Both steps need **kubectl plus RBAC** on the cluster, and he has neither.
+  - The usual fallback, a **dev container** with tooling and creds, isn't set up for him either.
+
+
+My idea:
+- **Jump box / VM:** use **IAP TCP forwarding** (`gcloud compute start-iap-tunnel`) so the ports come through to his PC. This is a typical pattern where devs never touch the cluster directly.
+
+
+Implementation plan:
+The cleanest version: a **small private VM** runs the `kubectl port-forward` **permanently**, and He reaches it through an **IAP tunnel** from his Windows PC. He never gets kubectl, SSH or cluster creds, only **tunnel access to one VM**.
+
+**Flow:** His PC → (IAP tunnel, 443) → Jump VM :7474/:7687 → (kubectl port-forward) → `svc/neo4j` in `indykite`
+
+### 1. Create a dedicated service account
+- Name it something like `neo4j-pfwd@<project>.iam.gserviceaccount.com`.
+- Give it IAM **`roles/container.clusterViewer`**, which is only enough for `get-credentials`.
+- Real permissions come from **K8s RBAC** in step 4, so it stays least-privilege.
+
+### 2. Create the jump VM (via Terraform / HCP workspace)
+- Use a small **e2-micro / e2-small** Debian VM in the **same VPC/region** as the GKE cluster (europe-west2).
+- Give it **no external IP**, with **Shielded VM** on (most enterprise org policies enforce this anyway).
+- Attach the SA from step 1 with scope **`cloud-platform`**.
+- Add a network tag such as **`neo4j-jumpbox`**.
+- Turn on **Private Google Access** on the subnet, plus **Cloud NAT** if apt installs need internet (or bake a golden image).
+- If the GKE control plane is private, add the VM's subnet to **master authorized networks**.
+
+### 3. Firewall rule for IAP
+- Allow ingress from the **IAP range `35.235.240.0/20`**.
+- Open only ports **7474, 7687** (and **22** if *you* want admin SSH).
+- Target the **`neo4j-jumpbox`** tag only.
+
+### 4. K8s RBAC (commit to your Config Sync repo)
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: neo4j-portforward, namespace: indykite}
+rules:
+- apiGroups: [""]
+  resources: ["services"]
+  resourceNames: ["neo4j"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get","list"]
+- apiGroups: [""]
+  resources: ["pods/portforward"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: neo4j-portforward, namespace: indykite}
+subjects:
+- kind: User
+  name: neo4j-pfwd@<project>.iam.gserviceaccount.com
+roleRef: {kind: Role, name: neo4j-portforward, apiGroup: rbac.authorization.k8s.io}
+```
+- **No secret access** is granted here, so the VM can't read `indykite-auth`.
+
+### 5. Set up the VM
+```bash
+sudo apt-get install -y kubectl google-cloud-cli-gke-gcloud-auth-plugin
+sudo useradd -m pfwd
+sudo -u pfwd gcloud container clusters get-credentials <cluster> \
+  --region europe-west2 --internal-ip
+```
+
+### 6. Run port-forward as a systemd service
+`/etc/systemd/system/neo4j-pfwd.service`:
+```ini
+[Unit]
+Description=Neo4j port-forward
+After=network-online.target
+
+[Service]
+User=pfwd
+ExecStart=/usr/bin/kubectl -n indykite port-forward --address 0.0.0.0 svc/neo4j 7474:7474 7687:7687
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+```bash
+sudo systemctl enable --now neo4j-pfwd
+```
+- **`Restart=always`** matters because port-forward **dies whenever the Neo4j pod restarts**, and this reconnects it automatically.
+- Binding to **`0.0.0.0`** is safe here: no external IP, and the firewall only allows IAP.
+
+### 7. Grant him access to the tunnel
+- Give him **`roles/iap.tunnelResourceAccessor`**, scoped to **this instance only**, not the whole project.
+- He needs **no** compute, OS Login or GKE roles.
+
+### 8. His side (Windows)
+- Install the **Google Cloud CLI** and run `gcloud auth login`.
+- Open **two terminals**, one per port:
+```powershell
+gcloud compute start-iap-tunnel neo4j-jumpbox 7474 --local-host-port=localhost:7474 --zone europe-west2-a
+gcloud compute start-iap-tunnel neo4j-jumpbox 7687 --local-host-port=localhost:7687 --zone europe-west2-a
+```
+- Then open **`http://localhost:7474`**, connect URL **`neo4j://localhost:7687`**, user `neo4j`.
+
+### 9. Getting the password to him
+- Don't paste it in Teams. Put it in **Secret Manager** and grant him **`secretAccessor` on that one secret** only.
+- Better still, **External Secrets Operator** can keep it synced from Secret Manager into the K8s secret.
+
+### Gotchas to watch for
+- **Corporate proxy:** IAP uses `tunnel.cloudproxy.app` on 443. proxies sometimes block it, so check with the network team early.
+- **Tunnel closed?** If he opens 7474 but not 7687, the UI loads but **login fails**. This is the most common confusion.
+- **One Neo4j for everyone:** if more people need this later, consider an **internal LB + IAP for HTTPS** instead of each person running tunnels.
+- **Change record:** VM + firewall + RBAC is a **small change**, but raise it properly since it's a new access path into a tenant namespace.
