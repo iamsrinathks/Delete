@@ -1,0 +1,38 @@
+
+### Option A: 20-minute test with a launcher (Local harness)
+
+1. **Clean the VS Code user `settings.json`** (remove the `file` exporter lines), then add:
+```json
+"github.copilot.chat.otel.enabled": true,
+"github.copilot.chat.otel.exporterType": "otlp-http",
+"github.copilot.chat.otel.captureContent": false,
+"github.copilot.chat.otel.captureIdentity": true
+```
+2. **Fully close VS Code**, then run this in PowerShell:
+```powershell
+$h = & "C:\Program Files\nodejs\node.exe" "C:\src\npm-global\node_modules\@xxxxx\claude-code\bin\xxxxx-claude.js" otel-headers | ConvertFrom-Json
+$env:OTEL_EXPORTER_OTLP_ENDPOINT = "https://prd.int.api.xxxxx.com/anthropic/claude-code/telemetry"
+$env:OTEL_EXPORTER_OTLP_PROTOCOL = "http/json"
+$env:OTEL_EXPORTER_OTLP_HEADERS  = "Authorization=$($h.Authorization)"
+code .
+```
+   - **`code .` from this window** passes the variables to VS Code. A Start-menu launch won't see them.
+   - **Session variables only**, nothing permanent, so it disappears when you close the window.
+3. In VS Code, use the **Local harness** (static env headers apply to the extension), run 2–3 agent prompts, and wait about 2 minutes.
+4. **Query Studio:** look for `@resource.service.name = copilot-chat`, plus `user.name` from `captureIdentity`.
+- **After about 20 minutes the token expires → 401s.** That's expected and shows why the managed `headersProvider` is needed.
+
+### Option B: quick experiment (unofficial)
+- Add `"chat.agentHost.otel.enabled": true` to the VS Code user settings. Keep the user `headersProvider` in `~\.copilot\settings.json`.
+- Start a **Copilot harness** session and run a few prompts. In Query Studio, look for **new data without 401s** in the gateway.
+- **If it works,** that's a useful (undocumented) finding. **If not,** it confirms the docs. Either way, **don't rely on it for rollout**.
+
+**Recommendation**
+- Use **Option A** today to show Andy that VS Code data flows, and to see what the metrics look like.
+- Raise an **Intune/desktop request** for the managed file. That's the **only official** route for a long-running VS Code setup.
+
+Sources:
+- [Monitor agent usage with OpenTelemetry (VS Code docs)](https://code.visualstudio.com/docs/agents/guides/monitoring-agents)
+- [Test: Agent Host managed OTel export and restart · microsoft/vscode#338234](https://github.com/microsoft/vscode/issues/338234)
+- [Agent Host OTel settings only work for Copilot, not Claude or Codex · microsoft/vscode#328322](https://github.com/microsoft/vscode/issues/328322)
+- [Visual Studio Code 1.143 release notes](https://code.visualstudio.com/updates/v1_143)
