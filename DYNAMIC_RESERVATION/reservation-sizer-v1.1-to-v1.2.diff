@@ -1,0 +1,2215 @@
+diff --git a/README.md b/README.md
+index 0dd0fb9..e6bdcc0 100644
+--- a/README.md
++++ b/README.md
+@@ -1,16 +1,34 @@
+-# Reservation Sizer — POC Implementation Steps (v1.1)
++# Reservation Sizer — POC Implementation Steps (v1.2)
+ 
+ > Daily job that reads GKE node history, autoscaler stockouts and live reservations, then raises **one
+ > GitHub PR** that raises `instance_count` in your `node_pool_reservations` Terraform map.
+ > **POC:** one cluster · scale-up only · a human merges every PR.
+ 
+-**Status:** POC v1.1 · supersedes POC plan v1.0 · kit version `poc-1.1.1`
++**Status:** POC v1.2 · supersedes POC plan v1.1 · kit version `poc-1.2.0`
+ 
+ ---
+ 
+-## What changed from v1.0
++## What changed from v1.1
+ 
+-| Area | v1.0 | v1.1 (this kit) | Why |
++| Area | v1.1 | v1.2 (this kit) | Why |
++|---|---|---|---|
++| Stockout lookup | Crashed (`KeyError`, exit 4) when an error did not name its MIG and the scale-up touched several zones | Fixed. Such events are **reported, not added** (`stockoutAmbiguous: "skip"`; `"all-zones"` counts every zone) | BALANCED scale-ups often touch all three zones at once |
++| Holds | Any held key stopped the whole run | Apply pending/failed, reservation missing or not READY → **only that key** is held; the other keys are still sized (exit 3). Live **above** the branch (DRIFT) still stops everything | A stock-out in one zone no longer freezes the other zones. Drift stays global: any apply would shrink the drifted reservation |
++| Zero nodes | `node-metric`: a pool at 0 nodes looked like missing data → fail-safe | Coverage is judged **for the cluster** (any node series); a MIG without nodes counts as 0 | Pools with min 0, or a quiet zone, can be sized |
++| `--ca-bundle` | Replaced the public roots | **Added to** the public roots (sizer and GitHub client) | Google APIs go direct, GitHub through a TLS-inspecting proxy, in the same run |
++| CI guard | Ran the PR's own copy of the checker; diffed against `pull_request.base.sha` | Runs the checker **from the base commit**; diffs against the merge commit's first parent | A PR (or a stolen bot token) could rewrite the checker; a stale base blamed others' merges on the PR |
++| Dry-run PRs | Draft + label, nothing enforced | `[DRY RUN]` title + draft + `do-not-merge`; the guard **fails** on the title or the label and re-runs on label changes | "Ready for review" + merge used to work |
++| Mode switch | The draft PR stayed open with `do-not-merge` | The open PR is **closed and replaced** when the mode changes | A dry-run PR never becomes the live one |
++| Stale PRs | Left open when no change was needed; force-pushed on every run | **Closed with a comment** when no increase is needed (or on drift); **no push** when the file is unchanged | Old numbers can't be merged; approvals keep their meaning |
++| Affinity / Spot | Pool affinity read but unused | NO_RESERVATION and Spot pools not counted; SPECIFIC pools count only for their named reservation; `specificReservationRequired` reservations are not grown (`NOT_CONSUMABLE`) | Never grow what the pools can't use |
++| Comparison aids | — | Rows add `combined_peak` / `combined_required` (peak of the summed pools) and `target_excl_stockout` | Step 2 and Step 3b gates compare like with like |
++| Out-of-scope pools | Preflight warning only | Every row lists other pools on the same machine type in that zone (`out_of_scope_pools`, auto-provisioned flagged) | Auto-provisioned and compute-class pools consume ANY reservations too |
++| Job | Exit 2–5 retried once; `report.json` lost with the pod | `podFailurePolicy` fails the Job at once on 2–5; one structured **`sizer result`** log line per run | No duplicate runs; numbers survive in Cloud Logging |
++| Plan check | Counted "known after apply" attributes as changes | Ignores them (listed separately) | Real plans no longer fail on computed fields |
++
++## What changed in v1.1 (from v1.0)
++
++| Area | v1.0 | v1.1 | Why |
+ |---|---|---|---|
+ | Node history | kube-state-metrics + Managed Prometheus | **Cloud Monitoring GKE system metric** `kubernetes.io/node/cpu/allocatable_cores`, counted per node, mapped to MIGs | No Prometheus in the cluster (Dynatrace only). Same metric your `gke_node_peaks.py` already uses. Nothing new to deploy. |
+ | Kubernetes API access | ClusterRole on nodes | **None** (`automountServiceAccountToken: false`, no RBAC) | Everything comes from Google APIs. |
+@@ -33,7 +51,7 @@ ci/           check_reservation_change.py · check_tf_plan.py · reservation-siz
+ terraform/    hcl_map_to_json.py · sizer_access.tf (Terraform alternative to step 3) · module notes
+ k8s/templates ServiceAccount · CronJob · NetworkPolicy (ConfigMap generated from policy.json)
+ examples/demo offline dataset (generic names) for a demo with no GCP access
+-tests/        CI guards, HCL converter, GitHub client against a mock API
++tests/        CI guards (the workflow runs in a real git repo), HCL converter, GitHub client, preflight
+ ```
+ 
+ Nothing in the kit holds a project, cluster or region name. Every value comes from `config/sizer.env` and `config/policy.json`.
+@@ -45,9 +63,11 @@ Nothing in the kit holds a project, cluster or region name. Every value comes fr
+ ```bash
+ cd reservation-sizer-poc
+ python3 --version                                   # 3.9+
+-python3 -m unittest discover -s sizer/tests         # 24 tests: sizing, fail-safe, hold, drift
+-python3 -m unittest discover -s tests               # 15 tests: CI guards, HCL converter, GitHub flow
+-                                                    # (GitHub test needs: pip install "PyJWT[crypto]")
++python3 -m unittest discover -s sizer/tests         # 47 tests: sizing, fail-safe, holds, drift, affinity
++python3 -m unittest discover -s tests               # 39 tests: CI guard workflow, plan check, HCL converter,
++                                                    # GitHub flow, preflight, rendered manifests
++                                                    # (GitHub tests need: pip install "PyJWT[crypto]";
++                                                    #  guard tests need git + bash; PyYAML optional)
+ 
+ # Offline demo - good for the team walkthrough
+ python3 sizer/reservation_sizer.py --fixtures examples/demo --policy examples/demo/policy.json \
+@@ -124,10 +144,24 @@ Outputs land in `sizer-out/`:
+ - `pr_body.md`: exactly what the PR will say.
+ - `proposed.tfvars.json`: shown as a diff.
+ 
+-**Exit gate:** recommendations are within **±1 node per zone** of your manual *7-day peak + 10%*, and of `gke_node_peaks.py`.
++**Exit gate:** for every key in `report.json` → `rows[]`:
++
++- `combined_required + surge` is within **±1 node** of the comparable `gke_node_peaks.py` number (below);
++- `target_excl_stockout` is within ±1 of your manual *7-day peak + 10%*.
++
++The sizer's formula: per-pool `ceil(peak × 1.10)`, summed per (zone, machine type), + `max(maxSurge)` once per zone, + a capped stockout add.
++
++Comparable `gke_node_peaks.py` run (same 7 days, upgrades excluded, 10% as growth, surge added separately):
+ 
+-- The sizer's formula: per-pool `ceil(peak × 1.10)`, summed per (zone, machine type), + `max(maxSurge)` once per zone, + a capped stockout add.
+-- If the numbers differ, look in `report.json` → `rows[].pools[]` (per pool: peak, coverage, buckets excluded).
++```bash
++python3 gke_node_peaks.py --project "$PROJECT_ID" --target "$CLUSTER_NAME@$CLUSTER_LOCATION" \
++  --days 7 --basis peak_excl_upgrades --growth-pct 10 --skip-logs
++```
++
++- Take its `sizing_input` per shape/zone (no `--include-surge`), then add the largest `maxSurge` of the in-scope pools.
++- It counts **every** pool of that shape. If a row lists `out_of_scope_pools`, its number is higher by their nodes.
++- `target` can be above `combined_required + surge`. The sizer sums **per-pool** peaks and rounds each pool up, which is at least the peak of the summed pools. The PR body lists every key where the two differ. That gap is the POC's deliberate headroom, not an error.
++- If the numbers differ by more, look in `rows[].pools[]` (per pool: peak, coverage, buckets with nodes, buckets excluded).
+ 
+ ---
+ 
+@@ -164,7 +198,9 @@ LOCAL_IMPERSONATE=1 ./setup/02-run-local.sh      # runs AS the GSA, reads logs t
+ SIZER_ACCESS_TOKEN=invalid ./setup/02-run-local.sh; echo "exit=$?"   # expect exit=2, no proposed file
+ ```
+ 
+-- **Gate 1:** the impersonated run gives the **same numbers** as Step 2. That proves the 4 permissions plus the view are enough.
++- **Gate 1:** the impersonated run gives the **same `target_excl_stockout`** for every key as Step 2. That proves the 4 permissions plus the view are enough.
++  - `stockout_add` can be lower: the new log bucket only holds events from when the sink was created.
++  - Compare `stockout_add` again once the bucket holds `windowDays` of events.
+ - **Gate 2:** a bad credential produces **no recommendation**. Missing data never produces a number.
+ 
+ ---
+@@ -209,7 +245,11 @@ BASE_IMAGE=<approved-registry>/python:3.12-slim ./setup/04-build-push.sh   # bui
+    ```
+ 
+    - On the default branch, require the check **`reservation-sizer-guard`**, 1 approval and CODEOWNERS review.
++   - Also turn on **"Dismiss stale pull request approvals when new commits are pushed"**.
+    - Bot PRs (branch `reservation-sizer/*`) fail unless **only that file** changed, **only `instance_count`** moved, **up only**, and **≤ max step**.
++   - **Any** PR titled `[DRY RUN]…` or labelled `do-not-merge` fails.
++   - The checker always runs as it is on the **base** branch, never the PR's copy.
++   - Don't give the App the `workflows` permission. That is what stops its token from editing the guard workflow.
+ 
+ ---
+ 
+@@ -221,6 +261,7 @@ python3 setup/05-render-k8s.py      # → k8s/rendered/{serviceaccount,cronjob,n
+ 
+ - Commit `k8s/rendered/*` to your Config Sync repo, under the `NAMESPACE` path.
+ - **Keep `"mode": "report"`** for the first in-cluster run.
++- The CronJob uses `podFailurePolicy` (Kubernetes 1.26+): exits 2–5 fail the Job at once instead of running it twice.
+ - In report mode the job reads the tfvars file from GitHub (the App can read) but never writes.
+ - Check the NetworkPolicy against your datapath and egress design:
+   - **[Verify]** the metadata-server rule (169.254.169.254:80 and 169.254.169.252:988).
+@@ -236,35 +277,43 @@ python3 setup/05-render-k8s.py      # → k8s/rendered/{serviceaccount,cronjob,n
+ ./setup/06-run-once-in-cluster.sh     # creates a Job from the CronJob and follows its logs
+ ```
+ 
+-**Gate:** the same table as Step 3b, and `token_source` in the log is `metadata` (Workload Identity).
++**Gate:** the same `target_excl_stockout` as Step 3b, and `token_source` in the log is `metadata` (Workload Identity).
++
++- `report.json` stays in the pod. The **`sizer result`** log line carries the same numbers into Cloud Logging.
+ 
+ ---
+ 
+ ## Step 7 — Dry-run (1–2 weeks), then live
+ 
+ ```bash
+-# config/policy.json: "mode": "dry-run"   → draft PRs labelled do-not-merge
++# config/policy.json: "mode": "dry-run"   → "[DRY RUN]" draft PRs labelled do-not-merge
+ python3 setup/05-render-k8s.py && # commit configmap-policy.yaml via Config Sync
+ ./setup/06-run-once-in-cluster.sh
+ ```
+ 
+-- **During dry-run:** review each draft PR against your manual numbers. Leave it unmerged. The bot keeps **one** PR per cluster and resets its branch on each run.
+-- **Go live:** set `"mode": "live"`, re-render, then commit. A human still approves and merges every PR, and HCP Terraform applies it.
+-- **After merge:** the next run compares the branch with Compute Engine.
+-  - Not applied yet → exit **3 (HOLD)**, and no new change is stacked on top.
+-  - If it stays in HOLD for more than a day, check the HCP run, for example for `RESERVATION_CAPACITY_LIMIT_EXCEEDED` or `ZONE_RESOURCE_POOL_EXHAUSTED`.
++- **During dry-run:** review each draft PR against your manual numbers. Leave it unmerged; the guard fails it anyway.
++  - The bot keeps **one** PR per cluster and pushes only when the proposed file changes.
++  - It closes the PR, with a comment, when no increase is needed any more.
++- **Go live:** set `"mode": "live"`, re-render, then commit.
++  - The open dry-run PR is closed and a normal PR replaces it.
++  - A human still approves and merges every PR, and HCP Terraform applies it.
++- **After merge:** the next run compares the branch with Compute Engine, key by key.
++  - Not applied yet, or the apply failed → that key is **held** (`PENDING_APPLY`, exit 3). Nothing is stacked on it, but the other keys are still sized.
++  - If a key stays held for more than a day, check the HCP run, for example for `RESERVATION_CAPACITY_LIMIT_EXCEEDED` or `ZONE_RESOURCE_POOL_EXHAUSTED`.
++  - **Stock-out:** open a human PR that sets the key to its `step_back_to` value (live + half the missing VMs), from the hold message or the PR body. The guard blocks decreases in bot PRs, so stepping back stays a human decision in the POC.
++  - Live **above** the branch (`DRIFT`, changed outside Terraform) holds **every** key and closes the open bot PR, because any apply would shrink that reservation. Reconcile the file first.
+ 
+ ---
+ 
+ ## Reference
+ 
+-### Exit codes (alert on 2, 4, 5; on 3 only if it repeats)
++### Exit codes (alert on 2, 4, 5; on 3 only if it repeats; the Job fails at once on 2–5)
+ 
+ | Code | Meaning | What happened |
+ |---|---|---|
+-| 0 | OK | No change, a change proposed (report mode), or a PR raised/updated |
+-| 2 | **Fail-safe** | API error, coverage < `minDataCoverage`, empty series, machine-type mismatch. **Nothing written.** |
+-| 3 | **Hold** | Branch ≠ live, reservation missing, or not READY. **Nothing written.** |
++| 0 | OK | No change (open bot PR closed), a change proposed (report mode), or a PR raised/updated |
++| 2 | **Fail-safe** | API error, coverage < `minDataCoverage`, empty series, machine-type mismatch. **Nothing written**; an open bot PR is left as it is. |
++| 3 | **Hold** | At least one key held: branch > live, reservation missing or not READY. **Held keys keep their branch value; the other keys are still proposed.** Live > branch (`DRIFT`): **nothing written** and the open bot PR is closed. |
+ | 4 | Config | Bad policy or env, unknown pool, missing GitHub settings for PR modes |
+ | 5 | PR failed | GitHub API error after the numbers were computed |
+ 
+@@ -277,7 +326,9 @@ python3 setup/05-render-k8s.py && # commit configmap-policy.yaml via Config Sync
+ | `COULD_REDUCE` | Advisory only, never written |
+ | `NO_POOLS_IN_SCOPE` | Key for another region or machine type, left alone |
+ | `COMMITMENT_ATTACHED` | Skipped, because a commitment-attached reservation needs the replace process |
+-| `PENDING_APPLY` / `DRIFT` / `NOT_FOUND` / `NOT_READY` | Hold reasons |
++| `NOT_CONSUMABLE` | No in-scope pool can use this reservation (affinity, Spot, or `specificReservationRequired`). Left unchanged. |
++| `PENDING_APPLY` / `NOT_FOUND` / `NOT_READY` | Hold reasons for **that key** (`PENDING_APPLY` rows carry `step_back_to`) |
++| `DRIFT` | Hold for **every key**: live above the branch |
+ | `NO_DATA` / `MISMATCH` | Fail-safe reasons |
+ 
+ ### Policy (`config/policy.json`)
+@@ -290,6 +341,7 @@ python3 setup/05-render-k8s.py && # commit configmap-policy.yaml via Config Sync
+ | `windowDays` / `bufferPct` | 7 / 10 | Same as today's manual rule |
+ | `surgeHeadroom` | `auto` | Largest `maxSurge` of the pools sharing a key, added **once** per zone (pools upgrade one at a time) |
+ | `stockoutAddPerDay` / `stockoutCapPerKey` | 1 / 2 | +1 per distinct stockout day in that zone, capped |
++| `stockoutAmbiguous` | `skip` | Stockout whose error doesn't name the MIG and whose scale-up touched several zones: `skip` (report only) · `all-zones` (count it in each zone) |
+ | `maxStepPerKeyPerPR` | 3 | Clamp per key per PR (must match `SIZER_MAX_STEP`) |
+ | `minDataCoverage` | 0.9 | Below this, fail-safe |
+ | `historySource` | `node-metric` | `mig` = `compute.googleapis.com/instance_group/size`. **[Verify]** coverage in preflight before switching. |
+@@ -314,6 +366,8 @@ python3 setup/05-render-k8s.py && # commit configmap-policy.yaml via Config Sync
+ - [ ] **Upgrade drill:** a node pool upgrade inside the window appears in `upgrade_operations`, and the peak ignores the surge.
+ - [ ] One real PR merged + applied; the next run shows `OK`, not `PENDING_APPLY`.
+ - [ ] Security has reviewed: the 4-permission role, the conditional log view, the down-scoped App token, no K8s API access.
++- [ ] **Guard drill:** a test PR from a `reservation-sizer/test` branch that also edits `ci/check_reservation_change.py` fails the guard.
++- [ ] **Mode switch:** going from dry-run to live closes the draft PR and opens a normal one.
+ 
+ ## Accepted POC risks (unchanged from v1.0)
+ 
+@@ -321,6 +375,11 @@ python3 setup/05-render-k8s.py && # commit configmap-policy.yaml via Config Sync
+ - **ANY affinity:** the system pool isn't protected from user-pool bursts.
+ - **No N+1 or regional failover sizing.**
+ - **7-day window:** misses month-, quarter- and year-end peaks. Acceptable in non-prd only.
++- **Named pools only:** auto-provisioned pools (today) and compute-class pools (planned) on the same machine type consume the same ANY reservations, but they are not sized.
++  - Each row lists them in `out_of_scope_pools`.
++  - Fix before compute classes go live: key demand by machine type and zone across all pools.
++- **Stock-out step-back is manual:** after a failed apply, the key is held and the hold message suggests `step_back_to`. A human PR sets it, because bot PRs can't decrease.
++- **Sum of per-pool peaks:** `target` can sit above the peak of the summed pools (Step 2). This is accepted as headroom.
+ 
+ ## Still to verify in your environment
+ 
+@@ -330,7 +389,9 @@ python3 setup/05-render-k8s.py && # commit configmap-policy.yaml via Config Sync
+ | `instance_group/size` metric (only if you switch `historySource`) | Preflight coverage |
+ | NetworkPolicy metadata-server rule for your datapath | Step 6 run |
+ | Conditional `viewAccessor` is enough for `entries.list` on the view | Step 3b impersonated run |
+-| Label API permission on PRs | Non-fatal; the CI guard is the control |
++| Label API permission on PRs | Non-fatal; the guard also fails on the `[DRY RUN]` title |
++| Stockout errors name the failing MIG in their parameters | Preflight (30 days): otherwise they appear as `stockout_ambiguous` |
++| `podFailurePolicy` supported (Kubernetes 1.26+) | Step 6 run |
+ 
+ ## Sources
+ 
+diff --git a/ci/check_tf_plan.py b/ci/check_tf_plan.py
+index b96915e..c2891cd 100755
+--- a/ci/check_tf_plan.py
++++ b/ci/check_tf_plan.py
+@@ -7,6 +7,9 @@ check_tf_plan.py - fail unless a Terraform plan only UPDATES reservations in pla
+ 
+ Fails on: any create / delete / replace; any change to a resource of another type;
+ any reservation attribute change other than the count (specific_reservation[].count).
++Attributes the provider will only know after apply (after_unknown = true, shown as
++"(known after apply)") are listed but not counted as changes: the update is already
++restricted to in-place, and the reservation map holds literal values only.
+ With HCP Terraform, run this in a Run Task, or use the equivalent Sentinel/OPA policy.
+ """
+ 
+@@ -29,6 +32,24 @@ def diff_paths(before, after, path=""):
+     return [] if before == after else [path]
+ 
+ 
++def unknown_paths(u, path=""):
++    """Paths flagged true in a plan's after_unknown structure."""
++    if u is True:
++        return [path]
++    out = []
++    if isinstance(u, dict):
++        for k, v in u.items():
++            out += unknown_paths(v, f"{path}.{k}" if path else k)
++    elif isinstance(u, list):
++        for i, v in enumerate(u):
++            out += unknown_paths(v, f"{path}[{i}]")
++    return out
++
++
++def under(p, roots):
++    return any(p == r or p.startswith(r + ".") or p.startswith(r + "[") for r in roots)
++
++
+ def main():
+     ap = argparse.ArgumentParser()
+     ap.add_argument("plan_json")
+@@ -52,12 +73,16 @@ def main():
+             errors.append(f"{addr}: {actions} (only in-place update is allowed)")
+             continue
+         changed = diff_paths(rc["change"].get("before"), rc["change"].get("after"))
+-        unknown = [p for p in changed if p not in a.allowed_attr]
++        computed = unknown_paths(rc["change"].get("after_unknown") or {})
++        later = [p for p in changed if p not in a.allowed_attr and under(p, computed)]
++        unknown = [p for p in changed if p not in a.allowed_attr and not under(p, computed)]
++        if later:
++            print(f"computed after apply (not counted): {addr} {later}")
+         if unknown:
+             errors.append(f"{addr}: attributes other than the count change: {unknown}")
+         else:
+             updates += 1
+-            print(f"update: {addr} {changed}")
++            print(f"update: {addr} {[p for p in changed if p not in later]}")
+     if errors:
+         for e in errors:
+             print(f"ERROR: {e}")
+diff --git a/ci/reservation-sizer-guard.yml b/ci/reservation-sizer-guard.yml
+index 52763b4..3758d84 100644
+--- a/ci/reservation-sizer-guard.yml
++++ b/ci/reservation-sizer-guard.yml
+@@ -6,9 +6,21 @@
+ #   SIZER_MAX_STEP     max +N per key per PR (same as policy maxStepPerKeyPerPR), e.g. 3
+ # No `paths:` filter on purpose: a required check that never starts blocks every other PR.
+ # Pin actions/checkout to a commit SHA if your policy requires it.
++#
++# Why it is built this way:
++#   * The checker script runs as it is on the BASE commit, never the PR's copy: a PR (or a stolen
++#     bot token, which has contents:write) could otherwise edit ci/check_reservation_change.py
++#     and pass its own check. This workflow file itself cannot be changed by the bot's token
++#     (GitHub App tokens need the `workflows` permission to edit .github/workflows).
++#   * Diffs use HEAD^1 - the base the PR merge commit was built on - not pull_request.base.sha,
++#     which can be stale after main moves and then shows other people's changes as the PR's.
++#   * Dry-run PRs ("[DRY RUN]" title or do-not-merge label) always fail, whoever opened them.
++#     The labeled/unlabeled triggers re-run the check when a label is added or removed.
++#   * PR title and labels reach the script only through env vars, never ${{ }} inside `run`.
+ name: reservation-sizer-guard
+ on:
+   pull_request:
++    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+ permissions:
+   contents: read
+ jobs:
+@@ -20,28 +32,42 @@ jobs:
+           fetch-depth: 0
+       - name: Check reservations change
+         env:
+-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+           HEAD_REF: ${{ github.head_ref }}
++          PR_TITLE: ${{ github.event.pull_request.title }}
++          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+           TFVARS_PATH: ${{ vars.SIZER_TFVARS_PATH }}
+           MAX_STEP: ${{ vars.SIZER_MAX_STEP }}
+         run: |
+           set -euo pipefail
+-          [[ -n "$TFVARS_PATH" ]] || { echo "::error::repository variable SIZER_TFVARS_PATH is not set"; exit 1; }
+-          git diff --name-only "$BASE_SHA" HEAD > changed.txt
+-          echo "changed files:"; cat changed.txt
+-          bot=0; [[ "$HEAD_REF" == reservation-sizer/* ]] && bot=1
+-          if [[ $bot == 0 ]] && ! grep -qxF "$TFVARS_PATH" changed.txt; then
++          TMP="${RUNNER_TEMP:-/tmp}"
++          # 1. dry-run PRs can never pass (title prefix or label - either is enough)
++          if [[ "${PR_TITLE:-}" == "[DRY RUN]"* ]]; then
++            echo "::error::dry-run PR (title starts with [DRY RUN]) - do not merge"; exit 1
++          fi
++          if PR_LABELS="${PR_LABELS:-[]}" python3 -c 'import json,os,sys; sys.exit(0 if "do-not-merge" in json.loads(os.environ["PR_LABELS"] or "[]") else 1)'; then
++            echo "::error::PR is labelled do-not-merge"; exit 1
++          fi
++          [[ -n "${TFVARS_PATH:-}" ]] || { echo "::error::repository variable SIZER_TFVARS_PATH is not set"; exit 1; }
++          # 2. compare against the base this merge commit was built on
++          git rev-parse -q --verify 'HEAD^2' >/dev/null || { echo "::error::expected the PR merge commit (pull_request event)"; exit 1; }
++          BASE="$(git rev-parse 'HEAD^1')"
++          git diff --name-only "$BASE" HEAD > "$TMP/changed.txt"
++          echo "changed files:"; cat "$TMP/changed.txt"
++          bot=0; [[ "${HEAD_REF:-}" == reservation-sizer/* ]] && bot=1
++          if [[ $bot == 0 ]] && ! grep -qxF "$TFVARS_PATH" "$TMP/changed.txt"; then
+             echo "not a reservations change - nothing to check"; exit 0
+           fi
+-          git show "$BASE_SHA:$TFVARS_PATH" > base.json
+-          cp "$TFVARS_PATH" head.json
++          # 3. the checker from the BASE commit, never the PR's copy
++          git show "$BASE:ci/check_reservation_change.py" > "$TMP/check_reservation_change.py"
++          git show "$BASE:$TFVARS_PATH" > "$TMP/base.json"
++          git show "HEAD:$TFVARS_PATH" > "$TMP/head.json"
+           if [[ $bot == 1 ]]; then
+             # bot PRs: only this file, only the count field, up only, <= max step
+-            python3 ci/check_reservation_change.py --base base.json --head head.json \
+-              --changed-files changed.txt --allowed-path "$TFVARS_PATH" --max-step "${MAX_STEP:-3}"
++            python3 "$TMP/check_reservation_change.py" --base "$TMP/base.json" --head "$TMP/head.json" \
++              --changed-files "$TMP/changed.txt" --allowed-path "$TFVARS_PATH" --max-step "${MAX_STEP:-3}"
+           else
+             # human PRs: shape check only (decreases allowed) - warn, never block
+-            python3 ci/check_reservation_change.py --base base.json --head head.json \
++            python3 "$TMP/check_reservation_change.py" --base "$TMP/base.json" --head "$TMP/head.json" \
+               --max-step 100000 --allow-decrease \
+               || echo "::warning::reservation keys or non-count fields changed - review carefully"
+           fi
+diff --git a/config/policy.example.json b/config/policy.example.json
+index 31e3fb4..56efcc7 100644
+--- a/config/policy.example.json
++++ b/config/policy.example.json
+@@ -7,6 +7,7 @@
+   "surgeHeadroom": "auto",
+   "stockoutAddPerDay": 1,
+   "stockoutCapPerKey": 2,
++  "stockoutAmbiguous": "skip",
+   "maxStepPerKeyPerPR": 3,
+   "minDataCoverage": 0.9,
+   "historySource": "node-metric",
+diff --git a/config/sizer.env.example b/config/sizer.env.example
+index 559699a..a234ec6 100644
+--- a/config/sizer.env.example
++++ b/config/sizer.env.example
+@@ -39,7 +39,7 @@ GITHUB_APP_SECRET=""          # Secret Manager secret name holding the App priva
+ GITHUB_APP_SECRET_PROJECT=""  # empty = PROJECT_ID
+ 
+ # ---- container + CronJob ----------------------------------------------------------
+-IMAGE=""                      # <registry>/<repo>/reservation-sizer:poc-1.1.1 (pin by digest if required)
++IMAGE=""                      # <registry>/<repo>/reservation-sizer:poc-1.2.0 (pin by digest if required)
+ PRIORITY_CLASS=""             # existing PriorityClass for platform jobs; empty = cluster default
+ SCHEDULE="17 6 * * *"         # daily, off the hour
+ HTTPS_PROXY_URL=""            # e.g. http://<proxy-host>:<port>; empty = direct
+diff --git a/k8s/templates/cronjob.yaml b/k8s/templates/cronjob.yaml
+index 607e4bc..e1d4c9d 100644
+--- a/k8s/templates/cronjob.yaml
++++ b/k8s/templates/cronjob.yaml
+@@ -17,6 +17,15 @@ spec:
+       backoffLimit: 1
+       activeDeadlineSeconds: 1800
+       ttlSecondsAfterFinished: 604800
++      # Exit 2 (fail-safe), 3 (hold), 4 (config) and 5 (PR failed) are decisions, not crashes:
++      # fail the Job at once instead of running it a second time. Needs Kubernetes 1.26+.
++      podFailurePolicy:
++        rules:
++          - action: FailJob
++            onExitCodes:
++              containerName: sizer
++              operator: In
++              values: [2, 3, 4, 5]
+       template:
+         metadata:
+           labels:
+diff --git a/setup/03-access-gcloud.sh b/setup/03-access-gcloud.sh
+index 35f0f9f..bf19d65 100755
+--- a/setup/03-access-gcloud.sh
++++ b/setup/03-access-gcloud.sh
+@@ -74,7 +74,7 @@ if [[ -n "${GITHUB_APP_SECRET:-}" ]]; then
+   run gcloud secrets add-iam-policy-binding "$GITHUB_APP_SECRET" --project "$SP" \
+       --member="serviceAccount:$GSA_EMAIL" --role=roles/secretmanager.secretAccessor --quiet --format=none
+ else
+-  warn "GITHUB_APP_SECRET empty - skipped (re-run after step 5)"
++  warn "GITHUB_APP_SECRET empty - skipped (re-run after step 4b)"
+ fi
+ if [[ -n "${LOCAL_IMPERSONATOR_MEMBER:-}" ]]; then
+   ok "tokenCreator on $GSA_EMAIL for $LOCAL_IMPERSONATOR_MEMBER (lets you run step 2 AS the sizer; remove after the POC)"
+@@ -96,3 +96,4 @@ echo "    gcloud logging read 'log_id(\"container.googleapis.com/cluster-autosca
+ echo "      --bucket $LOG_BUCKET --location $LOG_LOCATION --view $LOG_VIEW --limit 3 --format='value(timestamp)'"
+ echo "  If nothing arrives, grant the writer identity roles/logging.bucketWriter."
+ echo "  NOTE: the bucket only holds events from now on - the stockout signal builds up over the window."
++echo "        Until windowDays have passed, compare runs on target_excl_stockout (README, Step 3b)."
+diff --git a/setup/preflight.py b/setup/preflight.py
+index ad97b21..dfb9d56 100755
+--- a/setup/preflight.py
++++ b/setup/preflight.py
+@@ -91,12 +91,17 @@ def main():
+         if p["strategy"] == "BLUE_GREEN":
+             warn(f"{pn}: BLUE_GREEN upgrades need ~2x nodes - surge headroom is not modelled")
+         if p["affinity"] not in ("ANY_RESERVATION", "UNSPECIFIED"):
+-            warn(f"{pn}: reservation affinity {p['affinity']} - the POC assumes ANY")
++            warn(f"{pn}: reservation affinity {p['affinity']} {p['reservation_values'] or ''} - only reservations "
++                 "this pool can consume are sized for it")
+         if p["spot"]:
+             bad(f"{pn}: Spot/preemptible pool cannot consume reservations - remove it from policy.pools")
+         others = sorted(set(by_mt[p["machine_type"]]) - set(pools))
+         if others:
+-            warn(f"{p['machine_type']} is also used by out-of-scope pools {others}: they consume ANY reservations too")
++            warn(f"{p['machine_type']} is also used by out-of-scope pools {others}: they consume ANY reservations too "
++                 "but are not sized (auto-provisioned / compute-class pools included)")
++    auto = [p.get("name") for p in cl.get("nodePools", []) or [] if (p.get("autoscaling") or {}).get("autoprovisioned")]
++    if auto:
++        warn(f"auto-provisioned pools present (not sized by the POC; names change): {sorted(auto)}")
+ 
+     section("Reservations in the cluster zones")
+     zones = sorted({m["zone"] for p in pools.values() for m in p["migs"]})
+@@ -123,8 +128,12 @@ def main():
+                                rs.stockout_filter(a.cluster, a.location, now - 7 * 86400), max_pages=1)
+         ok(f"{len(ents)} visibility entries in the last 7 days (first page)") if ents else \
+             warn("no autoscaler visibility entries in 7 days (quiet cluster, or logs excluded/routed elsewhere)")
+-        hits, n = rs.stockouts(gcp, f"projects/{a.project}", a.cluster, pools, now - 30 * 86400, location=a.location)
++        hits, n, amb = rs.stockouts(gcp, f"projects/{a.project}", a.cluster, pools, now - 30 * 86400,
++                                    location=a.location, ambiguous=pol["stockoutAmbiguous"])
+         ok(f"{n} stockout events in 30 days; by pool/zone: {dict(hits) or 'none'}")
++        if amb:
++            warn(f"{len(amb)} stockout event(s) without the failing MIG and a multi-zone scale-up "
++                 f"(stockoutAmbiguous={pol['stockoutAmbiguous']}): {amb[:3]}")
+     except rs.SizerError as e:
+         warn(f"cannot read logs with your account ({e}) - the sizer will use its log view")
+ 
+@@ -144,21 +153,28 @@ def main():
+     section(f"History coverage, last {a.hours}h (5-minute buckets)")
+     start, expected = now - a.hours * 3600, a.hours * 3600 // rs.ALIGN
+     region = a.location if not rs.re.match(r"^[a-z]+-[a-z]+\d+-[a-z]$", a.location) else a.location.rsplit("-", 1)[0]
+-    for source, fn in (("mig", lambda: rs.history_mig(gcp, pools, start, now, 1)),
++    for source, fn in (("mig", lambda: (rs.history_mig(gcp, pools, start, now, 1), None)),
+                        ("node-metric", lambda: rs.history_node_metric(gcp, pools, a.cluster, region, start, now, 1))):
+         try:
+-            hist = fn()
++            hist, cluster_buckets = fn()
+         except rs.SizerError as e:
+             (bad if source == pol["historySource"] else warn)(f"{source}: query failed: {e}")
+             continue
+         worst = 1.0
++        if cluster_buckets is not None:   # node-metric: a MIG at 0 nodes has no series - judge the cluster
++            worst = min(1.0, len(cluster_buckets) / expected)
++            print(f"        {source:11s} cluster: coverage {worst:.0%} (buckets with any node series)")
+         for pn, p in sorted(pools.items()):
+             for m in p["migs"]:
+                 s = hist.get(m["name"], {})
+-                cov = min(1.0, len(s) / expected)
+-                worst = min(worst, cov)
++                if cluster_buckets is None:
++                    cov = min(1.0, len(s) / expected)
++                    worst = min(worst, cov)
++                    label = f"coverage {cov:.0%}"
++                else:
++                    label = f"buckets with nodes {len(s)}/{len(cluster_buckets)}"
+                 latest = s[max(s)] if s else "-"
+-                print(f"        {source:11s} {pn}/{m['zone']}: coverage {cov:.0%}, latest {latest}, "
++                print(f"        {source:11s} {pn}/{m['zone']}: {label}, latest {latest}, "
+                       f"max {max(s.values()) if s else '-'}")
+         msg = f"{source}: worst coverage {worst:.0%}"
+         if worst >= pol["minDataCoverage"]:
+diff --git a/sizer/__pycache__/github_pr.cpython-313.pyc b/sizer/__pycache__/github_pr.cpython-313.pyc
+deleted file mode 100644
+index 931e2f7..0000000
+Binary files a/sizer/__pycache__/github_pr.cpython-313.pyc and /dev/null differ
+diff --git a/sizer/__pycache__/reservation_sizer.cpython-313.pyc b/sizer/__pycache__/reservation_sizer.cpython-313.pyc
+deleted file mode 100644
+index fb21439..0000000
+Binary files a/sizer/__pycache__/reservation_sizer.cpython-313.pyc and /dev/null differ
+diff --git a/sizer/github_pr.py b/sizer/github_pr.py
+index f001b6e..d6aa503 100755
+--- a/sizer/github_pr.py
++++ b/sizer/github_pr.py
+@@ -3,13 +3,22 @@ github_pr.py - minimal GitHub App client used by reservation_sizer.py to raise O
+ 
+ Needs PyJWT[crypto] (PyJWT + cryptography) for the App JWT. Works with github.com and GitHub
+ Enterprise Server (pass --github-api https://<ghe-host>/api/v3). Honours HTTPS_PROXY / NO_PROXY
+-and an optional corporate CA bundle. TLS verification is always on.
++and an optional corporate CA bundle (added to the public roots, never replacing them). TLS
++verification is always on.
+ 
+ Behaviour:
+   * installation token is DOWN-SCOPED to the one repo, contents:write + pull_requests:write only
+-  * fixed branch reservation-sizer/<env>-<cluster>, reset to the base branch on every run
+-  * commits only the one tfvars file; opens a PR or updates the existing open one
+-  * dry-run mode -> draft PR + do-not-merge label (falls back to non-draft if drafts unsupported)
++  * fixed branch reservation-sizer/<env>-<cluster>; when the proposed file changes, the branch is
++    reset to the base branch and the file committed once on top. When nothing changed (same file,
++    branch still one commit on top of the current base) nothing is pushed: no CI re-run, and an
++    existing approval keeps meaning what it approved
++  * opens a PR or updates the existing open one
++  * dry-run mode -> draft PR, "[DRY RUN]" title, do-not-merge label (falls back to non-draft if
++    drafts are unsupported; the CI guard still fails it on the title or label)
++  * an open bot PR whose dry-run/live state differs from the requested mode is closed with a
++    comment and a new PR is opened (a dry-run PR never silently becomes the live one)
++  * close_bot_pr(): closes the open bot PR with a comment (used when it no longer matches the
++    recommendation)
+ If your team already has a PR raiser, ignore this module and feed it sizer-out/proposed.tfvars.json
+ and sizer-out/pr_body.md.
+ """
+@@ -24,17 +33,37 @@ import urllib.parse
+ import urllib.request
+ 
+ TOKEN_PERMISSIONS = {"contents": "write", "pull_requests": "write"}
++DRY_RUN_PREFIX = "[DRY RUN] "
++DO_NOT_MERGE = "do-not-merge"
+ 
+ 
+ class GitHubError(Exception):
+     pass
+ 
+ 
++def ssl_context(ca_bundle=None):
++    """Public/system roots ALWAYS, plus the corporate bundle when given (cafile= alone would
++    trust ONLY the bundle)."""
++    ctx = ssl.create_default_context()
++    if ca_bundle:
++        ctx.load_verify_locations(cafile=ca_bundle)
++    return ctx
++
++
++def warn(message):
++    print(json.dumps({"severity": "WARNING", "component": "reservation-sizer", "message": message}),
++          file=sys.stderr)
++
++
++def is_dry_run_pr(pr):
++    labels = {(lb or {}).get("name") for lb in pr.get("labels", []) or []}
++    return bool(pr.get("draft")) or (pr.get("title") or "").startswith(DRY_RUN_PREFIX) or DO_NOT_MERGE in labels
++
++
+ class GitHub:
+     def __init__(self, api, token, ca_bundle=None):
+         self.api, self.token = api.rstrip("/"), token
+-        ctx = ssl.create_default_context(cafile=ca_bundle) if ca_bundle else ssl.create_default_context()
+-        self.opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
++        self.opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl_context(ca_bundle)))
+ 
+     @classmethod
+     def from_app(cls, api, app_id, installation_id, private_key_pem, repo=None, ca_bundle=None):
+@@ -78,24 +107,56 @@ class GitHub:
+         d = self._call("GET", f"/repos/{repo}/contents/{urllib.parse.quote(path)}?{q}")
+         return base64.b64decode(d["content"]).decode(), d["sha"]
+ 
++    def open_pr(self, repo, branch):
++        owner = repo.split("/")[0]
++        q = urllib.parse.urlencode({"head": f"{owner}:{branch}", "state": "open"})
++        prs = self._call("GET", f"/repos/{repo}/pulls?{q}") or []
++        return prs[0] if prs else None
++
++    def close_pr(self, repo, pr, comment):
++        try:  # the comment explains why; closing is what matters
++            self._call("POST", f"/repos/{repo}/issues/{pr['number']}/comments", {"body": comment})
++        except GitHubError as e:
++            warn(f"could not comment on PR #{pr['number']}: {e}")
++        self._call("PATCH", f"/repos/{repo}/pulls/{pr['number']}", {"state": "closed"})
++        return pr.get("html_url", "")
++
++    def close_bot_pr(self, repo, branch, comment):
++        """Close the open PR from the bot branch, if any. Returns its URL, or None."""
++        pr = self.open_pr(repo, branch)
++        return self.close_pr(repo, pr, comment) if pr else None
++
++    def _branch_is_current(self, repo, branch, ref_sha, base_sha, path, content):
++        """True if the branch is exactly one commit on top of base_sha and already holds content."""
++        commit = self._call("GET", f"/repos/{repo}/git/commits/{ref_sha}")
++        parents = [p.get("sha") for p in commit.get("parents", []) or []]
++        if parents != [base_sha]:
++            return False
++        current, _ = self.get_file(repo, path, branch)
++        return current == content
++
+     def raise_pr(self, repo, base, path, content, body, branch, title, draft, labels):
+         base = base or self.default_branch(repo)
+         base_sha = self._call("GET", f"/repos/{repo}/git/ref/heads/{urllib.parse.quote(base)}")["object"]["sha"]
++        pr = self.open_pr(repo, branch)
++        if pr and is_dry_run_pr(pr) != bool(draft):
++            self.close_pr(repo, pr, "Closed by reservation-sizer: mode changed to "
++                          f"{'dry-run' if draft else 'live'} - a new PR replaces this one.")
++            pr = None
+         ref = self._call("GET", f"/repos/{repo}/git/ref/heads/{urllib.parse.quote(branch)}", ok404=True)
+-        if ref is None:
+-            self._call("POST", f"/repos/{repo}/git/refs", {"ref": f"refs/heads/{branch}", "sha": base_sha})
+-        else:  # reset the bot branch so the PR always holds exactly one fresh change on top of base
+-            self._call("PATCH", f"/repos/{repo}/git/refs/heads/{urllib.parse.quote(branch)}",
+-                       {"sha": base_sha, "force": True})
+-        _, file_sha = self.get_file(repo, path, branch)
+-        self._call("PUT", f"/repos/{repo}/contents/{urllib.parse.quote(path)}", {
+-            "message": title, "content": base64.b64encode(content.encode()).decode(),
+-            "sha": file_sha, "branch": branch})
+-        owner = repo.split("/")[0]
+-        q = urllib.parse.urlencode({"head": f"{owner}:{branch}", "state": "open"})
+-        prs = self._call("GET", f"/repos/{repo}/pulls?{q}") or []
+-        if prs:
+-            pr = prs[0]
++        unchanged = (ref is not None and pr is not None
++                     and self._branch_is_current(repo, branch, ref["object"]["sha"], base_sha, path, content))
++        if not unchanged:
++            if ref is None:
++                self._call("POST", f"/repos/{repo}/git/refs", {"ref": f"refs/heads/{branch}", "sha": base_sha})
++            else:  # reset the bot branch so the PR always holds exactly one fresh change on top of base
++                self._call("PATCH", f"/repos/{repo}/git/refs/heads/{urllib.parse.quote(branch)}",
++                           {"sha": base_sha, "force": True})
++            _, file_sha = self.get_file(repo, path, branch)
++            self._call("PUT", f"/repos/{repo}/contents/{urllib.parse.quote(path)}", {
++                "message": title, "content": base64.b64encode(content.encode()).decode(),
++                "sha": file_sha, "branch": branch})
++        if pr:
+             self._call("PATCH", f"/repos/{repo}/pulls/{pr['number']}", {"title": title, "body": body})
+         else:
+             try:
+@@ -104,12 +165,13 @@ class GitHub:
+             except GitHubError as e:
+                 if not draft or "draft" not in str(e).lower():
+                     raise
++                warn("draft PRs not supported - opening a normal PR; the CI guard fails it on the "
++                     "[DRY RUN] title / do-not-merge label")
+                 pr = self._call("POST", f"/repos/{repo}/pulls",
+                                 {"title": title, "head": branch, "base": base, "body": body})
+         if labels:
+             try:
+                 self._call("POST", f"/repos/{repo}/issues/{pr['number']}/labels", {"labels": labels})
+             except GitHubError as e:  # labels are informational; the CI guard is the real control
+-                print(json.dumps({"severity": "WARNING", "component": "reservation-sizer",
+-                                  "message": f"could not add labels: {e}"}), file=sys.stderr)
++                warn(f"could not add labels: {e}")
+         return pr.get("html_url", "")
+diff --git a/sizer/reservation_sizer.py b/sizer/reservation_sizer.py
+index 00258dc..278cfbc 100755
+--- a/sizer/reservation_sizer.py
++++ b/sizer/reservation_sizer.py
+@@ -15,8 +15,10 @@ Data sources (all read-only):
+ Rules (POC):
+   * scale UP only; reductions are reported as advisory, never written
+   * any missing / low-coverage data -> no recommendation, exit 2 (fail-safe)
+-  * branch value != live reservation count (either direction), reservation missing or not
+-    READY -> no new change, exit 3 (hold; never stack on, or undercut, live capacity)
++  * live reservation ABOVE the branch value (changed outside Terraform) -> nothing proposed for
++    any key, exit 3: any apply of the workspace would shrink that reservation
++  * branch value above live (apply pending or failed, e.g. stock-out), reservation missing or
++    not READY -> that key is held at its branch value, the other keys are still sized, exit 3
+   * never adds or removes a reservation key; changes only the count field
+ 
+ Core needs only Python 3.9+ standard library. Auth: GKE metadata server (Workload Identity)
+@@ -41,7 +43,7 @@ import urllib.request
+ from collections import defaultdict
+ from datetime import datetime, timedelta, timezone
+ 
+-VERSION = "poc-1.1.1"
++VERSION = "poc-1.2.0"
+ MIG_METRIC = "compute.googleapis.com/instance_group/size"
+ NODE_METRIC = "kubernetes.io/node/cpu/allocatable_cores"
+ CA_LOG = "container.googleapis.com/cluster-autoscaler-visibility"
+@@ -49,6 +51,10 @@ STOCKOUT_MSG = "scale.up.error.out.of.resources"
+ ALIGN = 300  # seconds per history bucket
+ 
+ EXIT_OK, EXIT_FAILSAFE, EXIT_HOLD, EXIT_CONFIG, EXIT_PR = 0, 2, 3, 4, 5
++HOLD_STATUSES = ("PENDING_APPLY", "DRIFT", "NOT_FOUND", "NOT_READY")
++RESULT_FIELDS = ("key", "zone", "current", "actual", "in_use", "target", "target_excl_stockout", "combined_required",
++                 "stockout_add", "proposed", "step_back_to", "status")
++DRY_RUN_PREFIX = "[DRY RUN] "   # the CI guard fails any PR whose title starts with this
+ 
+ DEFAULT_POLICY = {
+     "enabled": True,
+@@ -59,6 +65,8 @@ DEFAULT_POLICY = {
+     "surgeHeadroom": "auto",       # "auto" = largest maxSurge of the pools sharing a key, or an int
+     "stockoutAddPerDay": 1,        # +N per distinct day with a stockout in that zone ...
+     "stockoutCapPerKey": 2,        # ... capped
++    "stockoutAmbiguous": "skip",   # stockout whose MIG is unknown and whose scale-up touched several
++                                   # zones: "skip" (report only) | "all-zones" (count it in each zone)
+     "maxStepPerKeyPerPR": 3,
+     "minDataCoverage": 0.9,
+     "historySource": "node-metric",  # node-metric (default, proven) | mig [verify with preflight]
+@@ -104,11 +112,21 @@ class SizerError(Exception):
+ 
+ 
+ # ----------------------------------------------------------------------------- HTTP + auth
++def ssl_context(ca_bundle=None):
++    """Public/system roots ALWAYS, plus the corporate bundle when one is given.
++    ssl.create_default_context(cafile=X) would trust ONLY X: Google APIs reached directly (Private
++    Google Access, no TLS inspection) would then fail while GitHub through the proxy works."""
++    ctx = ssl.create_default_context()
++    if ca_bundle:
++        ctx.load_verify_locations(cafile=ca_bundle)
++    return ctx
++
++
+ class Http:
+     """urllib with retries. Honours HTTPS_PROXY / NO_PROXY; TLS verification always on."""
+ 
+     def __init__(self, ca_bundle=None):
+-        ctx = ssl.create_default_context(cafile=ca_bundle) if ca_bundle else ssl.create_default_context()
++        ctx = ssl_context(ca_bundle)
+         self.opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
+         self.direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # metadata server
+ 
+@@ -308,12 +326,15 @@ def load_pools(cluster, wanted):
+             m = re.search(r"/zones/([^/]+)/instanceGroup(?:Manager)?s/([^/]+)$", u)
+             if m:
+                 migs.append({"zone": m.group(1), "name": m.group(2)})
++        ra = cfg.get("reservationAffinity") or {}
+         pools[p["name"]] = {
+             "machine_type": cfg.get("machineType", ""),
+             "migs": migs,
+             "max_surge": int(up.get("maxSurge", 0) or 0),
+             "strategy": up.get("strategy", "SURGE") or "SURGE",
+-            "affinity": (cfg.get("reservationAffinity") or {}).get("consumeReservationType", "UNSPECIFIED"),
++            "affinity": ra.get("consumeReservationType", "UNSPECIFIED"),
++            # SPECIFIC affinity values may be "name" or ".../reservations/name"
++            "reservation_values": sorted({v.rstrip("/").split("/")[-1] for v in ra.get("values", []) or []}),
+             "spot": bool(cfg.get("spot") or cfg.get("preemptible")),
+         }
+     missing = sorted(set(wanted) - set(pools))
+@@ -325,6 +346,40 @@ def load_pools(cluster, wanted):
+     return pools
+ 
+ 
++def other_pools(cluster, wanted):
++    """Pools NOT in policy.pools (including auto-provisioned / compute-class pools): they consume
++    ANY reservations of the same machine type too, but the POC does not size them."""
++    out = []
++    for p in cluster.get("nodePools", []) or []:
++        if p.get("name") in wanted:
++            continue
++        zones = set(p.get("locations", []) or [])
++        for u in p.get("instanceGroupUrls", []) or []:
++            m = re.search(r"/zones/([^/]+)/", u)
++            if m:
++                zones.add(m.group(1))
++        cfg = p.get("config") or {}
++        out.append({"name": p.get("name", ""), "machine_type": cfg.get("machineType", ""), "zones": sorted(zones),
++                    "autoprovisioned": bool((p.get("autoscaling") or {}).get("autoprovisioned"))})
++    return out
++
++
++def consumes(pool, res_name, specific_required):
++    """(True, "") if VMs of this pool can consume reservation `res_name`, else (False, reason)."""
++    if pool["spot"]:
++        return False, "Spot VMs cannot consume reservations"
++    aff = pool["affinity"]
++    if aff == "NO_RESERVATION":
++        return False, "reservation affinity NO_RESERVATION"
++    if aff == "SPECIFIC_RESERVATION":
++        if res_name in pool["reservation_values"]:
++            return True, ""
++        return False, f"SPECIFIC affinity to {pool['reservation_values'] or 'other reservations'}"
++    if specific_required:   # ANY / UNSPECIFIED pools never use a specificReservationRequired reservation
++        return False, "reservation has specificReservationRequired=true and the pool uses ANY affinity"
++    return True, ""
++
++
+ def history_mig(gcp, pools, start, end, chunk_days):
+     names = sorted({m["name"] for p in pools.values() for m in p["migs"]})
+     flt = (f'metric.type="{MIG_METRIC}" AND resource.type="instance_group" AND '
+@@ -343,7 +398,11 @@ def history_mig(gcp, pools, start, end, chunk_days):
+ 
+ 
+ def history_node_metric(gcp, pools, cluster_name, region, start, end, chunk_days):
+-    """Fallback: count k8s_node series per bucket, mapped to MIGs by node-name prefix."""
++    """Count k8s_node series per bucket, mapped to MIGs by node-name prefix.
++
++    Returns (hist, cluster_buckets). A MIG with 0 nodes has NO series, so "no series" cannot mean
++    "no data" per MIG. cluster_buckets = buckets in which the cluster reported ANY node (any pool):
++    that is the metric pipeline's coverage. Inside those buckets a MIG without nodes counts as 0."""
+     prefix = {}
+     for p in pools.values():
+         for m in p["migs"]:
+@@ -351,19 +410,21 @@ def history_node_metric(gcp, pools, cluster_name, region, start, end, chunk_days
+     flt = (f'metric.type="{NODE_METRIC}" AND resource.type="k8s_node" AND '
+            f'resource.labels.cluster_name="{cluster_name}" AND resource.labels.location=starts_with("{region}")')
+     nodes = defaultdict(lambda: defaultdict(set))
+-    unmapped = set()
++    unmapped, cluster_buckets = set(), set()
+     for ts in gcp.timeseries(flt, start, end, chunk_days):
+         node = (ts.get("resource", {}).get("labels", {}) or {}).get("node_name", "")
+         mig = prefix.get(node.rsplit("-", 1)[0])
++        buckets = {bucket(parse_ts(pt["interval"]["endTime"])) for pt in ts.get("points", []) or []}
++        cluster_buckets |= buckets
+         if not mig:
+             unmapped.add(node)
+             continue
+-        for pt in ts.get("points", []) or []:
+-            nodes[mig][bucket(parse_ts(pt["interval"]["endTime"]))].add(node)
++        for b in buckets:
++            nodes[mig][b].add(node)
+     if unmapped:
+-        log("INFO", "node-metric: nodes not in an in-scope MIG (other pools or deleted MIGs) ignored",
++        log("INFO", "node-metric: nodes not in an in-scope MIG (other pools or deleted MIGs) not counted",
+             count=len(unmapped))
+-    return {mig: {b: len(s) for b, s in by_b.items()} for mig, by_b in nodes.items()}
++    return {mig: {b: len(s) for b, s in by_b.items()} for mig, by_b in nodes.items()}, cluster_buckets
+ 
+ 
+ def upgrade_spans(ops, cluster_name, types, now):
+@@ -391,11 +452,17 @@ def stockout_filter(cluster_name, location, start):
+             f'resource.labels.cluster_name="{cluster_name}"{loc} AND timestamp>="{iso(start)}"')
+ 
+ 
+-def stockouts(gcp, resource, cluster_name, pools, start, location=None):
+-    """(pool, zone) -> set(days) with scale.up.error.out.of.resources.
+-    Only this message counts: quota / IP / noScaleUp reasons are not fixable by a reservation and
+-    can be triggered by any tenant's misconfigured pod."""
++def stockouts(gcp, resource, cluster_name, pools, start, location=None, ambiguous="skip"):
++    """Returns ((pool, zone) -> sorted days with scale.up.error.out.of.resources, event count,
++    ambiguous events). Only this message counts: quota / IP / noScaleUp reasons are not fixable by
++    a reservation and can be triggered by any tenant's misconfigured pod.
++
++    The failing MIG normally appears in the error parameters. If it does not, the scale-up decision
++    is looked up by eventId; when that decision touched several in-scope pool/zones (BALANCED often
++    scales all three zones at once) the failing zone is unknown: "skip" reports the event without
++    adding to any zone, "all-zones" counts it in every zone of the decision."""
+     mig_index = {m["name"]: (pn, m["zone"]) for pn, p in pools.items() for m in p["migs"]}
++    amb = []
+     base = stockout_filter(cluster_name, location, start)
+     # text search + resultInfo presence; the messageId is re-checked in code below
+     entries = gcp.log_entries(resource, base + f' AND jsonPayload.resultInfo:* AND "{STOCKOUT_MSG}"')
+@@ -422,15 +489,26 @@ def stockouts(gcp, resource, cluster_name, pools, start, location=None):
+         flt += " AND (" + " OR ".join(f'jsonPayload.decision.eventId="{x}"' for x in chunk) + ")"
+         for e in gcp.log_entries(resource, flt):
+             dec = e.get("jsonPayload", {}).get("decision") or {}
+-            for im in (dec.get("scaleUp") or {}).get("increasedMigs", []) or []:
+-                mig = im.get("mig") or {}
+-                key = (mig.get("nodepool"), mig.get("zone"))
+-                if key[0] in pools:
+-                    hits[key].add(day(unresolved[dec["eventId"]]))
+-                    unresolved.pop(dec["eventId"], None)
++            eid = dec.get("eventId")
++            if eid not in unresolved:          # unrelated, or already resolved by an earlier entry
++                continue
++            keys = sorted({((im.get("mig") or {}).get("nodepool"), (im.get("mig") or {}).get("zone"))
++                           for im in (dec.get("scaleUp") or {}).get("increasedMigs", []) or []
++                           if (im.get("mig") or {}).get("nodepool") in pools})
++            if not keys:
++                continue
++            ts = unresolved.pop(eid)           # read once: several MIGs may share this event
++            if len(keys) == 1 or ambiguous == "all-zones":
++                for k in keys:
++                    hits[k].add(day(ts))
++            else:
++                amb.append({"event_id": eid, "day": day(ts), "pool_zones": [f"{p}/{z}" for p, z in keys]})
++    if amb:
++        log("WARNING", "stockout events with an unknown failing zone (scale-up touched several zones) - "
++            f"policy stockoutAmbiguous={ambiguous}", count=len(amb))
+     if unresolved:
+         log("WARNING", "stockout events whose node pool/zone could not be resolved (ignored)", count=len(unresolved))
+-    return {k: sorted(v) for k, v in hits.items()}, n_events
++    return {k: sorted(v) for k, v in hits.items()}, n_events, amb
+ 
+ 
+ def actual_reservations(gcp, zones):
+@@ -455,13 +533,16 @@ def required_for(peak, buffer_pct):
+     return math.ceil(round(peak * (1 + buffer_pct / 100.0), 6))
+ 
+ 
+-def compute(entries, pools, hist, spans, hits, actual, pol, start, end):
++def compute(entries, pools, hist, spans, hits, actual, pol, start, end, cluster_buckets=None, others=()):
++    """cluster_buckets: node-metric only (see history_node_metric) - coverage is judged for the whole
++    cluster and buckets without nodes of a MIG count as 0. None (mig source): coverage per MIG."""
+     count_f = pol["countField"]
+     aliases = pol.get("machineTypeAliases") or {}
+     expected = max(1, (end - start) // ALIGN)
+     rows, problems, holds = [], [], []
+     proposed = copy.deepcopy(entries)
+     covered = set()
++    window = None if cluster_buckets is None else sorted(b for b in cluster_buckets if start <= b <= end)
+ 
+     for key in sorted(entries):
+         ent = entries[key]
+@@ -479,85 +560,121 @@ def compute(entries, pools, hist, spans, hits, actual, pol, start, end):
+             continue
+         row["current"] = current
+ 
+-        members = []
++        candidates = []
+         for pn, p in sorted(pools.items()):
+             if aliases.get(p["machine_type"], p["machine_type"]) != mt:
+                 continue
+             for m in p["migs"]:
+                 if m["zone"] == zone:
+-                    members.append((pn, p, m))
++                    candidates.append((pn, p, m))
+                     covered.add((pn, zone))
+-        if not members:
++        if not candidates:
+             row["status"] = "NO_POOLS_IN_SCOPE"
+             row["notes"].append("no in-scope pool uses this machine type in this zone - left unchanged")
+             continue
++        shared = sorted(o["name"] + (" (auto-provisioned)" if o["autoprovisioned"] else "") for o in others
++                        if aliases.get(o["machine_type"], o["machine_type"]) == mt and zone in o["zones"])
++        if shared:
++            row["out_of_scope_pools"] = shared
++            row["notes"].append(f"out-of-scope pool(s) {', '.join(shared)} also use {mt} in this zone and can "
++                                "consume this reservation - their nodes are NOT counted")
+ 
+         live = actual.get((zone, name))
+         row["actual"] = live["count"] if live else None
+         row["in_use"] = live["in_use"] if live else None
+         if live is None:
+-            holds.append(f"{key}: reservation {name} not found in {zone} (not applied yet, or wrong name)")
++            holds.append(f"{key}: reservation {name} not found in {zone} (not applied yet, or wrong name) - key held")
+             row["status"] = "NOT_FOUND"
+             continue
+         if live["status"] and live["status"] != "READY":
+-            holds.append(f"{key}: reservation {name} status {live['status']} (resize in progress?)")
++            holds.append(f"{key}: reservation {name} status {live['status']} (resize in progress?) - key held")
+             row["status"] = "NOT_READY"
+             continue
+         if live["machine_type"] and live["machine_type"] != mt:
+             problems.append(f"{key}: tfvars machine_type {mt} but reservation {name} is {live['machine_type']}")
+             row["status"] = "MISMATCH"
+             continue
+-        if live["specific_required"]:
+-            row["notes"].append("specificReservationRequired=true - ANY-affinity pools will NOT consume it")
+         if live["commitment"]:
+             row["status"] = "COMMITMENT_ATTACHED"
+             row["notes"].append(f"attached to commitment {live['commitment']} - resize via replace process, skipped")
+             continue
+ 
++        members = []
++        for pn, p, m in candidates:
++            ok, why = consumes(p, name, live["specific_required"])
++            if ok:
++                members.append((pn, p, m))
++            else:
++                row["notes"].append(f"{pn} cannot consume {name}: {why} - not counted")
++        if not members:
++            row["status"] = "NOT_CONSUMABLE"
++            row["notes"].append("no in-scope pool can consume this reservation - left unchanged (idle cost?)")
++            continue
++
+         total, latest, details, data_ok = 0, 0, [], True
++        combined, combined_excl = defaultdict(int), set()
+         for pn, p, m in members:
+             series = hist.get(m["name"], {})
+-            present = {b: v for b, v in series.items() if start <= b <= end}
+-            cov = min(1.0, len(present) / expected)
++            if window is not None:
++                present = {b: series.get(b, 0) for b in window}
++                cov = min(1.0, len(window) / expected)
++                what = "cluster node-metric coverage"
++            else:
++                present = {b: v for b, v in series.items() if start <= b <= end}
++                cov = min(1.0, len(present) / expected)
++                what = f"MIG {m['name']} coverage"
+             excl = spans.get(pn, []) + spans.get("*", [])
+-            kept = [v for b, v in present.items() if not any(s <= b <= e for s, e in excl)]
++            kept = {b: v for b, v in present.items() if not any(s <= b <= e for s, e in excl)}
++            combined_excl |= set(present) - set(kept)
++            for b, v in present.items():
++                combined[b] += v
+             if cov < pol["minDataCoverage"] or not kept:
+                 data_ok = False
+-                problems.append(f"{key}: pool {pn} MIG {m['name']} coverage {cov:.0%} "
++                problems.append(f"{key}: pool {pn}: {what} {cov:.0%} "
+                                 f"(< {pol['minDataCoverage']:.0%}) or no data outside upgrade windows")
+-            peak = max(kept) if kept else 0
++            peak = max(kept.values()) if kept else 0
+             req = required_for(peak, pol["bufferPct"])
+             total += req
+             latest += present[max(present)] if present else 0
+             details.append({"pool": pn, "mig": m["name"], "coverage": round(cov, 3), "peak": peak,
+-                            "required": req, "excluded_buckets": len(present) - len(kept)})
++                            "required": req, "excluded_buckets": len(present) - len(kept),
++                            "buckets_with_nodes": sum(1 for v in present.values() if v > 0)})
+             if p["strategy"] == "BLUE_GREEN":
+                 row["notes"].append(f"{pn} uses BLUE_GREEN upgrades - surge headroom not modelled")
+-            if p["spot"]:
+-                row["notes"].append(f"{pn} is Spot - cannot consume reservations")
+         row["pools"] = details
+         if not data_ok:
+             row["status"] = "NO_DATA"
+             continue
+ 
++        # For comparison with gke_node_peaks.py: peak of the SUMMED members (the sizer itself sums
++        # per-pool peaks, which is >= this when pools peak at different times).
++        combined_kept = [v for b, v in combined.items() if b not in combined_excl]
++        combined_peak = max(combined_kept) if combined_kept else 0
+         surge = (max(p["max_surge"] for _, p, _ in members) if pol["surgeHeadroom"] == "auto"
+                  else int(pol["surgeHeadroom"]))
+         stock_days = sorted({d for pn, _, _ in members for d in hits.get((pn, zone), [])})
+         stock = min(pol["stockoutAddPerDay"] * len(stock_days), pol["stockoutCapPerKey"])
+         target = total + surge + stock
+         row.update({"surge": surge, "stockout_days": stock_days, "stockout_add": stock, "target": target,
++                    "target_excl_stockout": total + surge,
++                    "combined_peak": combined_peak,
++                    "combined_required": required_for(combined_peak, pol["bufferPct"]),
+                     "latest_nodes": latest,
+                     "on_demand_exposure": latest - live["in_use"]})
+ 
+         if live["count"] != current:
+             if current > live["count"]:
+-                holds.append(f"{key}: branch says {current}, Compute Engine has {live['count']} "
+-                             "(previous increase not applied yet)")
++                step_back = live["count"] + max(1, (current - live["count"]) // 2)
++                row["step_back_to"] = step_back
++                holds.append(f"{key}: branch says {current}, Compute Engine has {live['count']} - key held "
++                             f"(apply pending, or failed). If the apply failed with a stock-out, retry a smaller "
++                             f"step: set {count_f} to {step_back} in a human PR")
+                 row["status"] = "PENDING_APPLY"
+             else:
+-                # Out-of-band change: writing any value below live would SHRINK the reservation on apply.
++                # Out-of-band change: ANY apply of this workspace would SHRINK the reservation back.
+                 holds.append(f"{key}: Compute Engine has {live['count']} but branch says {current} "
+-                             "(changed outside Terraform - reconcile the file first)")
++                             "(changed outside Terraform) - nothing is proposed for ANY key until the file "
++                             "is reconciled, because any apply would shrink this reservation")
+                 row["status"] = "DRIFT"
+             continue
+         if row["on_demand_exposure"] is not None and row["on_demand_exposure"] < 0:
+@@ -579,7 +696,7 @@ def compute(entries, pools, hist, spans, hits, actual, pol, start, end):
+             row["status"] = "OK"
+ 
+     uncovered = sorted({(pn, m["zone"], p["machine_type"]) for pn, p in pools.items() for m in p["migs"]
+-                        if (pn, m["zone"]) not in covered})
++                        if (pn, m["zone"]) not in covered and not p["spot"] and p["affinity"] != "NO_RESERVATION"})
+     return rows, proposed, problems, holds, uncovered
+ 
+ 
+@@ -588,8 +705,12 @@ def dump_tfvars(doc):
+     return json.dumps(doc, indent=2, sort_keys=True) + "\n"
+ 
+ 
+-def pr_body(meta, rows, ops_rows, n_events, uncovered, snapshot):
+-    L = [f"## Reservation Sizer - {meta['env']} / {meta['project']} / {meta['location']} / {meta['cluster']}", "",
++def pr_body(meta, rows, ops_rows, n_events, uncovered, snapshot, holds=(), ambiguous=()):
++    title = f"## Reservation Sizer - {meta['env']} / {meta['project']} / {meta['location']} / {meta['cluster']}"
++    L = [title, ""]
++    if meta.get("mode") == "dry-run":
++        L += ["> **DRY RUN - do not merge.** The `reservation-sizer-guard` check fails on this PR on purpose.", ""]
++    L += [
+          "| Key | Zone | Machine type | Branch | Live | Proposed | Δ | Driver | Status |",
+          "|---|---|---|---|---|---|---|---|---|"]
+     for r in rows:
+@@ -608,6 +729,13 @@ def pr_body(meta, rows, ops_rows, n_events, uncovered, snapshot):
+     for r in rows:
+         if r.get("stockout_days"):
+             L.append(f"  - `{r['key']}`: days {', '.join(r['stockout_days'])}")
++    if ambiguous:
++        L.append(f"- Stockouts with an unknown failing zone (not added, `stockoutAmbiguous`): "
++                 + ", ".join(f"{a['day']} {'/'.join(a['pool_zones'])}" for a in ambiguous))
++    diffs = [r for r in rows if "combined_required" in r and r["combined_required"] + r["surge"] != r["target_excl_stockout"]]
++    if diffs:
++        L.append("- Sum of per-pool peaks vs peak of the summed pools (+ surge): " + ", ".join(
++            f"`{r['key']}` {r['target_excl_stockout']} vs {r['combined_required'] + r['surge']}" for r in diffs))
+     L.append("- On-demand exposure now (nodes − reservation in use): " + (", ".join(
+         f"`{r['key']}` {r['on_demand_exposure']}" for r in rows if r.get("on_demand_exposure") is not None) or "n/a"))
+     adv = [r for r in rows if r.get("status") == "COULD_REDUCE"]
+@@ -616,6 +744,8 @@ def pr_body(meta, rows, ops_rows, n_events, uncovered, snapshot):
+     if uncovered:
+         L.append("- ⚠️ In-scope pools/zones with no reservation key: "
+                  + ", ".join(f"{p}/{z}/{mt}" for p, z, mt in uncovered))
++    if holds:
++        L += ["", "**Held keys (left at their branch value in this PR)**"] + [f"- {h}" for h in holds]
+     notes = [f"`{r['key']}`: {n}" for r in rows for n in r.get("notes", [])]
+     if notes:
+         L += ["", "**Notes**"] + [f"- {n}" for n in notes]
+@@ -648,6 +778,8 @@ def load_policy(path):
+         raise SizerError(EXIT_CONFIG, "policy.pools is empty - list the in-scope node pool names")
+     if pol["historySource"] not in ("mig", "node-metric"):
+         raise SizerError(EXIT_CONFIG, "policy.historySource must be mig | node-metric")
++    if pol["stockoutAmbiguous"] not in ("skip", "all-zones"):
++        raise SizerError(EXIT_CONFIG, "policy.stockoutAmbiguous must be skip | all-zones")
+     return pol
+ 
+ 
+@@ -742,20 +874,25 @@ def run(argv=None):
+     region = (a.location or cluster.get("location", "")).rsplit("-", 1)[0] if re.match(
+         r"^[a-z]+-[a-z]+\d+-[a-z]$", a.location or cluster.get("location", "")) else (a.location or cluster.get("location", ""))
+     pools = load_pools(cluster, pol["pools"])
++    others = other_pools(cluster, pol["pools"])
+     log("INFO", "collecting history", source=pol["historySource"], pools=sorted(pools), window_days=pol["windowDays"])
++    cluster_buckets = None
+     if pol["historySource"] == "mig":
+         hist = history_mig(gcp, pools, start, end, pol["chunkDays"])
+     else:
+-        hist = history_node_metric(gcp, pools, cluster_name, region, start, end, pol["chunkDays"])
++        hist, cluster_buckets = history_node_metric(gcp, pools, cluster_name, region, start, end, pol["chunkDays"])
+     spans, ops_rows = upgrade_spans(gcp.operations(), cluster_name, pol["excludeOperationTypes"], now)
+     resource = a.log_resource or f"projects/{a.project}"
+-    hits, n_events = stockouts(gcp, resource, cluster_name, pools, start, location=a.location)
++    hits, n_events, ambiguous = stockouts(gcp, resource, cluster_name, pools, start, location=a.location,
++                                          ambiguous=pol["stockoutAmbiguous"])
+     zones = {e.get("zone") for e in entries.values() if e.get("zone")}
+     actual = actual_reservations(gcp, zones)
+ 
+-    rows, proposed, problems, holds, uncovered = compute(entries, pools, hist, spans, hits, actual, pol, start, end)
++    rows, proposed, problems, holds, uncovered = compute(entries, pools, hist, spans, hits, actual, pol, start, end,
++                                                         cluster_buckets=cluster_buckets, others=others)
+     snapshot = hashlib.sha256(json.dumps(
+         {"entries": entries, "hist": {k: sorted(v.items()) for k, v in sorted(hist.items())},
++         "cluster_buckets": sorted(cluster_buckets) if cluster_buckets is not None else None,
+          "spans": spans, "hits": {f"{k[0]}|{k[1]}": v for k, v in hits.items()},
+          "actual": {f"{k[0]}|{k[1]}": v for k, v in sorted(actual.items())}, "policy": pol},
+         sort_keys=True, default=str).encode()).hexdigest()[:16]
+@@ -763,23 +900,49 @@ def run(argv=None):
+     meta = {"env": a.env_name, "project": a.project, "location": a.location, "cluster": cluster_name,
+             "window_days": pol["windowDays"], "start": iso(start), "end": iso(end), "buffer_pct": pol["bufferPct"],
+             "history_source": pol["historySource"], "run_id": run_id, "mode": pol["mode"], "version": VERSION}
+-    changed = any(r.get("status") == "INCREASE" for r in rows)
+-    report = {"meta": meta, "rows": rows, "problems": problems, "holds": holds,
+-              "uncovered": uncovered, "upgrade_operations": ops_rows, "stockout_events": n_events,
++    drift = [r["key"] for r in rows if r.get("status") == "DRIFT"]
++    blocked = bool(drift and pol["noStacking"])          # any apply would shrink a drifted reservation
++    held = [r["key"] for r in rows if r.get("status") in HOLD_STATUSES]
++    changed = not problems and not blocked and any(r.get("status") == "INCREASE" for r in rows)
++    report = {"meta": meta, "rows": rows, "problems": problems, "holds": holds, "held_keys": held,
++              "blocked_by_drift": drift if blocked else [], "uncovered": uncovered,
++              "upgrade_operations": ops_rows, "stockout_events": n_events, "stockout_ambiguous": ambiguous,
+               "changed": changed, "snapshot": snapshot}
+     with open(os.path.join(a.out_dir, "report.json"), "w") as f:
+         json.dump(report, f, indent=2, default=str)
+     print_table(rows)
++    # report.json lives in the pod's emptyDir and is gone when the Job ends: log the numbers too.
++    log("NOTICE", "sizer result", run_id=run_id, snapshot=snapshot,
++        rows=[{k: r.get(k) for k in RESULT_FIELDS if r.get(k) not in (None, [], "")} for r in rows])
++
++    branch = f"reservation-sizer/{a.env_name}-{cluster_name}"
++    pr_mode = github is not None and pol["mode"] in ("dry-run", "live")
++
++    def close_stale(reason):
++        """An open bot PR that no longer matches the recommendation must not stay mergeable."""
++        if not pr_mode:
++            return
++        try:
++            url = github.close_bot_pr(a.github_repo, branch,
++                                      f"Closed by reservation-sizer {VERSION} (run {run_id}): {reason}")
++        except Exception as e:  # noqa: BLE001
++            raise SizerError(EXIT_PR, f"closing the stale bot PR failed: {e}")
++        if url:
++            log("NOTICE", "stale bot PR closed", url=url, reason=reason)
+ 
+     if problems:
+         for p in problems:
+             log("ERROR", "fail-safe: " + p)
+-        log("ERROR", "FAIL-SAFE: data incomplete - no recommendation written", problems=len(problems))
++        log("ERROR", "FAIL-SAFE: data incomplete - no recommendation written (an open bot PR is left as is)",
++            problems=len(problems))
+         return EXIT_FAILSAFE, report
+-    if holds and pol["noStacking"]:
+-        for h in holds:
+-            log("WARNING", "hold: " + h)
+-        log("WARNING", "HOLD: branch and live reservations differ - no new change until they match")
++    for h in holds:
++        log("WARNING", "hold: " + h)
++    if blocked:
++        log("WARNING", "HOLD: live reservation above the branch value - nothing proposed for any key until "
++            "the file is reconciled", keys=drift)
++        close_stale(f"held - live reservation above the branch value for {', '.join(drift)}; "
++                    "merging this PR would trigger an apply that shrinks it")
+         return EXIT_HOLD, report
+     for u in uncovered:
+         log("WARNING", "in-scope pool/zone has no reservation key", pool=u[0], zone=u[1], machine_type=u[2])
+@@ -789,34 +952,37 @@ def run(argv=None):
+     out_tfvars = os.path.join(a.out_dir, "proposed.tfvars.json")
+     with open(out_tfvars, "w") as f:
+         f.write(dump_tfvars(new_doc))
+-    body = pr_body(meta, rows, ops_rows, n_events, uncovered, snapshot)
++    body = pr_body(meta, rows, ops_rows, n_events, uncovered, snapshot, holds=holds, ambiguous=ambiguous)
+     with open(os.path.join(a.out_dir, "pr_body.md"), "w") as f:
+         f.write(body)
+ 
+     summary = {k: sum(1 for r in rows if r.get("status") == k) for k in
+-               ("INCREASE", "OK", "COULD_REDUCE", "NO_POOLS_IN_SCOPE", "COMMITMENT_ATTACHED", "DISABLED")}
++               ("INCREASE", "OK", "COULD_REDUCE", "NO_POOLS_IN_SCOPE", "NOT_CONSUMABLE", "COMMITMENT_ATTACHED",
++                "DISABLED", "PENDING_APPLY", "NOT_FOUND", "NOT_READY")}
+     summary["notes"] = sum(len(r.get("notes", [])) for r in rows)
+-    log("NOTICE", "sizer run complete", changed=changed, statuses=summary, snapshot=snapshot,
++    log("NOTICE", "sizer run complete", changed=changed, statuses=summary, held_keys=held, snapshot=snapshot,
+         out_dir=os.path.abspath(a.out_dir), token_source=token.source)
+ 
+-    if changed and github and pol["mode"] in ("dry-run", "live"):
++    if changed and pr_mode:
++        dry = pol["mode"] == "dry-run"
+         try:
+             url = github.raise_pr(a.github_repo, a.github_base, a.tfvars_path, dump_tfvars(new_doc), body,
+-                                  branch=f"reservation-sizer/{a.env_name}-{cluster_name}",
+-                                  title=f"reservation-sizer: {a.env_name}/{cluster_name} increase reservations",
+-                                  draft=(pol["mode"] == "dry-run"),
+-                                  labels=["reservation-sizer", f"env:{a.env_name}"]
+-                                  + (["do-not-merge"] if pol["mode"] == "dry-run" else []))
++                                  branch=branch,
++                                  title=(DRY_RUN_PREFIX if dry else "")
++                                  + f"reservation-sizer: {a.env_name}/{cluster_name} increase reservations",
++                                  draft=dry,
++                                  labels=["reservation-sizer", f"env:{a.env_name}"] + (["do-not-merge"] if dry else []))
+             log("NOTICE", "pull request raised/updated", url=url)
+         except SizerError:
+             raise
+         except Exception as e:  # noqa: BLE001
+             raise SizerError(EXIT_PR, f"PR raise failed: {e}")
++    elif pr_mode:
++        close_stale("no increase is needed any more" + (f" (held keys: {', '.join(held)})" if held else ""))
+     elif changed:
+         log("NOTICE", "change proposed - PR not raised (report mode)",
+             file=os.path.abspath(out_tfvars))
+-    return EXIT_OK, report
+-
++    return (EXIT_HOLD if holds and pol["noStacking"] else EXIT_OK), report
+ 
+ def main():
+     try:
+diff --git a/sizer/tests/__pycache__/test_sizer.cpython-313.pyc b/sizer/tests/__pycache__/test_sizer.cpython-313.pyc
+deleted file mode 100644
+index 57f0a80..0000000
+Binary files a/sizer/tests/__pycache__/test_sizer.cpython-313.pyc and /dev/null differ
+diff --git a/sizer/tests/test_sizer.py b/sizer/tests/test_sizer.py
+index c19ae83..225db33 100644
+--- a/sizer/tests/test_sizer.py
++++ b/sizer/tests/test_sizer.py
+@@ -1,11 +1,16 @@
+ """Offline tests for reservation_sizer.py. Run:  python3 -m unittest discover -s sizer/tests -v"""
+ 
++import contextlib
++import io
+ import json
+ import os
+ import shutil
++import ssl
+ import sys
+ import tempfile
++import types
+ import unittest
++from unittest import mock
+ 
+ HERE = os.path.dirname(os.path.abspath(__file__))
+ sys.path.insert(0, os.path.dirname(HERE))
+@@ -49,6 +54,8 @@ class Fix:
+             "k-b": {"enabled": True, "name": "res-b", "zone": ZB, "machine_type": MT, "instance_count": 13}}}
+         self.policy = {"mode": "report", "pools": ["system", "user"]}
+         self.node_metric = False
++        self.pool_cfg = {}        # pool -> extra "config" fields (reservationAffinity, spot)
++        self.pool_extra = {}      # pool -> extra top-level fields (autoscaling)
+ 
+     def write(self):
+         self.policy.setdefault("historySource", "node-metric" if self.node_metric else "mig")
+@@ -56,8 +63,10 @@ class Fix:
+         for pn in ("system", "user", "tenant"):
+             urls = [f"https://www.googleapis.com/compute/v1/projects/p/zones/{z}/instanceGroupManagers/{m}"
+                     for (p, z), m in MIGS.items() if p == pn]
+-            pools.append({"name": pn, "config": {"machineType": MT}, "instanceGroupUrls": urls,
+-                          "upgradeSettings": {"maxSurge": self.surge.get(pn, 1), "strategy": "SURGE"}})
++            pools.append({"name": pn, "config": {"machineType": MT, **self.pool_cfg.get(pn, {})},
++                          "instanceGroupUrls": urls,
++                          "upgradeSettings": {"maxSurge": self.surge.get(pn, 1), "strategy": "SURGE"},
++                          **self.pool_extra.get(pn, {})})
+         ts = []
+         for key, mig in MIGS.items():
+             fn = self.value_fns.get(key, (lambda v: (lambda t: v))(self.values[key]))
+@@ -171,10 +180,14 @@ class SizerTests(unittest.TestCase):
+         self.assertIsNone(prop)
+ 
+     def test_no_stacking_hold(self):
+-        self.f.res[ZA][0]["specificReservation"]["count"] = "12"   # branch says 14, live 12
++        # v1.2: branch 14 > live 12 (apply pending or failed) holds ONLY that key; k-b is still sized
++        self.f.res[ZA][0]["specificReservation"]["count"] = "12"
+         code, rep, prop = self.f.run()
+         self.assertEqual(code, rs.EXIT_HOLD)
+-        self.assertIsNone(prop)
++        self.assertEqual(row(rep, "k-a")["status"], "PENDING_APPLY")
++        self.assertEqual(prop["k-a"]["instance_count"], 14)      # left at its branch value, never stacked
++        self.assertEqual(prop["k-b"]["instance_count"], 15)
++        self.assertEqual(rep["held_keys"], ["k-a"])
+ 
+     def test_reduction_is_advisory_only(self):
+         self.f.values[("user", ZA)] = 5
+@@ -232,7 +245,8 @@ class SizerTests(unittest.TestCase):
+         code, rep, prop = self.f.run()
+         self.assertEqual(code, rs.EXIT_HOLD)
+         self.assertEqual(row(rep, "k-b")["status"], "NOT_FOUND")
+-        self.assertIsNone(prop)
++        self.assertEqual(prop["k-b"]["instance_count"], 13)      # held key unchanged
++        self.assertEqual(prop["k-a"]["instance_count"], 16)      # other key still sized
+ 
+     def test_reservation_updating_is_hold(self):
+         self.f.res[ZA][0]["status"] = "UPDATING"
+@@ -281,5 +295,292 @@ class SizerTests(unittest.TestCase):
+                              {x: y for x, y in orig.items() if x != "instance_count"})
+ 
+ 
++# ----------------------------------------------------------------------------- v1.2 helpers
++TEST_CA_PEM = """-----BEGIN CERTIFICATE-----
++MIIB3TCCAYOgAwIBAgIURpX5H0THQifT/oprt2ZXrlNI4k4wCgYIKoZIzj0EAwIw
++QzEfMB0GA1UEAwwWVGVzdCBDb3Jwb3JhdGUgUm9vdCBDQTEgMB4GA1UECgwXcmVz
++ZXJ2YXRpb24tc2l6ZXIgdGVzdHMwIBcNMjYxMTA1MTcyODMxWhgPMjEyNjEwMTIx
++NzI4MzFaMEMxHzAdBgNVBAMMFlRlc3QgQ29ycG9yYXRlIFJvb3QgQ0ExIDAeBgNV
++BAoMF3Jlc2VydmF0aW9uLXNpemVyIHRlc3RzMFkwEwYHKoZIzj0CAQYIKoZIzj0D
++AQcDQgAE4adMrOgSfRcOf49xCwQo0vSca69S6vhXcPhMNVRfhJo9Ql5epCjb9g9W
++TxwmV2i2MxJ7My9qEQdfR0LpK31ghqNTMFEwHQYDVR0OBBYEFHg+i+LroYJhFUvm
++aYMAtArTbWnHMB8GA1UdIwQYMBaAFHg+i+LroYJhFUvmaYMAtArTbWnHMA8GA1Ud
++EwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIgWnLujq5M9SI61w/L1Uas9WE0
+++RgX/ucb6brhdDkCLogCIQCvwnKzcjtreYtpXYASTxOXfg/FTk7yjl5PFfadeRo9
++wg==
++-----END CERTIFICATE-----
++"""
++WINDOW_END = rs.bucket(rs.parse_ts(NOW))
++WINDOW_START = WINDOW_END - 7 * 86400
++
++
++def stockout_error(ts, eid, param):
++    return {"timestamp": ts, "jsonPayload": {"resultInfo": {"results": [
++        {"eventId": eid, "errorMsg": {"messageId": rs.STOCKOUT_MSG, "parameters": [param]}}]}}}
++
++
++def scale_up_decision(ts, eid, *pool_zones):
++    return {"timestamp": ts, "jsonPayload": {"decision": {"eventId": eid, "scaleUp": {"increasedMigs": [
++        {"mig": {"name": MIGS[pz], "nodepool": pz[0], "zone": pz[1]}, "requestedNodes": 1} for pz in pool_zones]}}}}
++
++
++class FakeGitHub:
++    """Stands in for github_pr.GitHub inside rs.run(): records what the sizer asks for."""
++
++    def __init__(self, tfvars):
++        self.tfvars, self.raised, self.closed = tfvars, [], []
++
++    def default_branch(self, repo):
++        return "main"
++
++    def get_file(self, repo, path, ref):
++        return json.dumps(self.tfvars), "sha"
++
++    def raise_pr(self, repo, base, path, content, body, branch, title, draft, labels):
++        self.raised.append({"content": json.loads(content)["node_pool_reservations"], "body": body,
++                            "branch": branch, "title": title, "draft": draft, "labels": labels})
++        return "http://pr/1"
++
++    def close_bot_pr(self, repo, branch, comment):
++        self.closed.append((branch, comment))
++        return "http://pr/1"
++
++
++def run_with_github(fix, mode):
++    """rs.run() in dry-run/live mode against FakeGitHub (no network, no PyJWT)."""
++    fix.policy["mode"] = mode
++    fix.write()
++    key = os.path.join(fix.dir, "key.pem")
++    with open(key, "w") as fh:
++        fh.write("unused")
++    fake = FakeGitHub(fix.tfvars)
++    module = types.ModuleType("github_pr")
++    module.GitHub = types.SimpleNamespace(from_app=lambda *a, **k: fake)
++    with mock.patch.dict(sys.modules, {"github_pr": module}):
++        code, report = rs.run(["--fixtures", fix.dir, "--project", "p", "--location", REGION, "--cluster", "c1",
++                               "--policy", os.path.join(fix.dir, "policy.json"), "--out-dir",
++                               os.path.join(fix.dir, "out"), "--now", NOW, "--env-name", "test",
++                               "--github-repo", "org/infra", "--tfvars-path", "ws/r.auto.tfvars.json",
++                               "--github-key-file", key, "--github-app-id", "1", "--github-installation-id", "2"])
++    return code, report, fake
++
++
++class V12Tests(unittest.TestCase):
++    """One or more tests per review item fixed in v1.2."""
++
++    def setUp(self):
++        self.f = Fix()
++
++    def tearDown(self):
++        self.f.cleanup()
++
++    # ---- item 1: stockout fallback lookup
++    def test_item1_multi_zone_decision_without_mig_does_not_crash_and_is_skipped(self):
++        self.f.logs = [stockout_error("2026-11-02T10:01:00Z", "e9", "opaque-id"),
++                       scale_up_decision("2026-11-02T10:00:00Z", "e9", ("user", ZA), ("user", ZB))]
++        code, rep, prop = self.f.run()                       # v1.1: KeyError -> exit 4
++        self.assertEqual(code, 0)
++        self.assertEqual(row(rep, "k-a")["stockout_add"], 0)
++        self.assertEqual(row(rep, "k-b")["stockout_add"], 0)
++        self.assertEqual(rep["stockout_ambiguous"],
++                         [{"event_id": "e9", "day": "2026-11-02", "pool_zones": [f"user/{ZA}", f"user/{ZB}"]}])
++        with open(os.path.join(self.f.dir, "out", "pr_body.md")) as fh:
++            self.assertIn("unknown failing zone", fh.read())
++
++    def test_item1_all_zones_policy_counts_each_zone_once(self):
++        self.f.policy["stockoutAmbiguous"] = "all-zones"
++        self.f.logs = [stockout_error("2026-11-02T10:01:00Z", "e9", "opaque-id"),
++                       scale_up_decision("2026-11-02T10:00:00Z", "e9", ("user", ZA), ("user", ZB), ("system", ZA))]
++        code, rep, _ = self.f.run()
++        self.assertEqual(code, 0)
++        self.assertEqual(row(rep, "k-a")["stockout_days"], ["2026-11-02"])   # system+user in ZA = one day
++        self.assertEqual(row(rep, "k-b")["stockout_add"], 1)
++
++    def test_item1_bad_ambiguous_policy_is_config_error(self):
++        self.f.policy["stockoutAmbiguous"] = "guess"
++        with self.assertRaises(rs.SizerError) as cm:
++            self.f.run()
++        self.assertEqual(cm.exception.code, rs.EXIT_CONFIG)
++
++    # ---- item 2: holds per key; drift still blocks everything
++    def test_item2_pending_apply_hint_suggests_smaller_step(self):
++        self.f.res[ZA][0]["specificReservation"]["count"] = "10"   # branch 14, live 10 (apply failed)
++        code, rep, _ = self.f.run()
++        self.assertEqual(code, rs.EXIT_HOLD)
++        self.assertEqual(row(rep, "k-a")["step_back_to"], 12)       # live + half of the missing 4
++        self.assertTrue(any("set instance_count to 12" in h for h in rep["holds"]))
++
++    def test_item2_drift_still_blocks_every_key(self):
++        self.f.res[ZA][0]["specificReservation"]["count"] = "16"   # live above branch
++        code, rep, prop = self.f.run()
++        self.assertEqual(code, rs.EXIT_HOLD)
++        self.assertIsNone(prop)                                      # k-b NOT proposed either
++        self.assertEqual(rep["blocked_by_drift"], ["k-a"])
++        self.assertFalse(rep["changed"])
++
++    def test_item2_hold_plus_increase_raises_pr_and_exits_3(self):
++        self.f.res[ZA][0]["specificReservation"]["count"] = "12"
++        code, rep, gh = run_with_github(self.f, "live")
++        self.assertEqual(code, rs.EXIT_HOLD)
++        self.assertEqual(len(gh.raised), 1)
++        self.assertEqual(gh.raised[0]["content"]["k-a"]["instance_count"], 14)   # held, unchanged
++        self.assertEqual(gh.raised[0]["content"]["k-b"]["instance_count"], 15)
++        self.assertIn("Held keys", gh.raised[0]["body"])
++
++    # ---- item 3: zero nodes are not missing data (node-metric)
++    def test_item3_zone_at_zero_nodes_is_not_missing_data(self):
++        self.f.node_metric = True
++        cut = WINDOW_START + int(0.3 * 7 * 86400)
++        self.f.value_fns[("user", ZB)] = lambda t: 0 if t < cut else 9    # 30% of the window at 0 nodes
++        code, rep, prop = self.f.run()                                     # v1.1: NO_DATA, exit 2
++        self.assertEqual(code, 0, rep["problems"])
++        self.assertEqual(prop["k-b"]["instance_count"], 15)               # 4 + 10 + 1
++        user_b = next(d for d in row(rep, "k-b")["pools"] if d["pool"] == "user")
++        self.assertLess(user_b["buckets_with_nodes"], 0.75 * 7 * 288)
++
++    def test_item3_cluster_wide_gap_is_still_fail_safe(self):
++        self.f.node_metric = True
++        cut = WINDOW_START + int(0.2 * 7 * 86400)
++        for k in MIGS:                                                    # no node series at all: pipeline gap
++            v = self.f.values[k]
++            self.f.value_fns[k] = (lambda v: (lambda t: 0 if t < cut else v))(v)
++        code, rep, prop = self.f.run()
++        self.assertEqual(code, rs.EXIT_FAILSAFE)
++        self.assertIsNone(prop)
++        self.assertTrue(any("cluster node-metric coverage" in p for p in rep["problems"]))
++
++    def test_item3_out_of_scope_nodes_prove_the_pipeline_works(self):
++        self.f.node_metric = True
++        cut = WINDOW_START + int(0.2 * 7 * 86400)
++        for k in MIGS:
++            if k[0] != "tenant":                                          # tenant pool keeps reporting
++                v = self.f.values[k]
++                self.f.value_fns[k] = (lambda v: (lambda t: 0 if t < cut else v))(v)
++        code, rep, _ = self.f.run()
++        self.assertEqual(code, 0, rep["problems"])
++
++    # ---- item 4: CA bundle is added to the public roots
++    def test_item4_ssl_context_keeps_public_roots_and_adds_bundle(self):
++        pem = os.path.join(self.f.dir, "corp.pem")
++        with open(pem, "w") as fh:
++            fh.write(TEST_CA_PEM)
++        orig = ssl.SSLContext.load_default_certs
++        with mock.patch.object(ssl.SSLContext, "load_default_certs", autospec=True, side_effect=orig) as m:
++            ctx = rs.ssl_context(pem)
++        self.assertTrue(m.called)                                          # v1.1: never called with cafile=
++        subjects = [dict(x[0] for x in c["subject"]).get("commonName") for c in ctx.get_ca_certs()]
++        self.assertIn("Test Corporate Root CA", subjects)
++        self.assertEqual(ctx.verify_mode, ssl.CERT_REQUIRED)
++
++    # ---- item 5: a stockout-free number for the Step 3b / Step 6 comparison
++    def test_item5_target_excl_stockout_reported(self):
++        self.f.logs = [stockout_error("2026-11-02T10:00:00Z", "e1", MIGS[("user", ZB)])]
++        _, rep, _ = self.f.run()
++        r = row(rep, "k-b")
++        self.assertEqual(r["stockout_add"], 1)
++        self.assertEqual(r["target_excl_stockout"], r["target"] - 1)
++
++    # ---- item 7: dry-run PRs are marked three ways
++    def test_item7_dry_run_pr_is_marked(self):
++        code, _, gh = run_with_github(self.f, "dry-run")
++        self.assertEqual(code, 0)
++        pr = gh.raised[0]
++        self.assertTrue(pr["title"].startswith("[DRY RUN] "))
++        self.assertTrue(pr["draft"])
++        self.assertIn("do-not-merge", pr["labels"])
++        self.assertIn("DRY RUN - do not merge", pr["body"])
++
++    def test_item7_live_pr_is_not_marked(self):
++        _, _, gh = run_with_github(self.f, "live")
++        pr = gh.raised[0]
++        self.assertFalse(pr["title"].startswith("[DRY RUN]"))
++        self.assertFalse(pr["draft"])
++        self.assertNotIn("do-not-merge", pr["labels"])
++
++    # ---- item 9: stale bot PRs are closed
++    def test_item9_open_pr_closed_when_no_increase_needed(self):
++        self.f.values[("user", ZA)], self.f.values[("user", ZB)] = 5, 5     # targets now below current
++        code, _, gh = run_with_github(self.f, "live")
++        self.assertEqual(code, 0)
++        self.assertFalse(gh.raised)
++        self.assertEqual(len(gh.closed), 1)
++        self.assertIn("no increase is needed", gh.closed[0][1])
++
++    def test_item9_open_pr_closed_on_drift(self):
++        self.f.res[ZA][0]["specificReservation"]["count"] = "16"
++        code, _, gh = run_with_github(self.f, "live")
++        self.assertEqual(code, rs.EXIT_HOLD)
++        self.assertFalse(gh.raised)
++        self.assertIn("shrinks", gh.closed[0][1])
++
++    def test_item9_fail_safe_leaves_open_pr_alone(self):
++        self.f.drop[("user", ZA)] = 2
++        code, _, gh = run_with_github(self.f, "live")
++        self.assertEqual(code, rs.EXIT_FAILSAFE)
++        self.assertFalse(gh.raised)
++        self.assertFalse(gh.closed)
++
++    # ---- item 10: per-pool sum vs peak of the summed pools
++    def test_item10_combined_peak_reported_next_to_per_pool_sum(self):
++        t1, t2 = WINDOW_END - 2 * 86400, WINDOW_END - 4 * 86400
++        self.f.value_fns[("system", ZA)] = lambda t: 6 if t1 <= t <= t1 + 3600 else 3
++        self.f.value_fns[("user", ZA)] = lambda t: 12 if t2 <= t <= t2 + 3600 else 10
++        _, rep, _ = self.f.run()
++        r = row(rep, "k-a")
++        self.assertEqual(r["target_excl_stockout"], 22)        # ceil(6.6)=7 + ceil(13.2)=14 + surge 1
++        self.assertEqual(r["combined_peak"], 16)               # max(6+10, 3+12)
++        self.assertEqual(r["combined_required"], 18)           # ceil(17.6)
++        with open(os.path.join(self.f.dir, "out", "pr_body.md")) as fh:
++            self.assertIn("`k-a` 22 vs 19", fh.read())
++
++    # ---- item 11: out-of-scope / auto-provisioned pools on the same machine type
++    def test_item11_out_of_scope_and_auto_provisioned_pools_noted(self):
++        self.f.pool_extra["tenant"] = {"autoscaling": {"enabled": True, "autoprovisioned": True}}
++        _, rep, _ = self.f.run()
++        self.assertEqual(row(rep, "k-a")["out_of_scope_pools"], ["tenant (auto-provisioned)"])
++        self.assertNotIn("out_of_scope_pools", row(rep, "k-b"))   # tenant has no MIG in zone b
++
++    # ---- item 13: reservation affinity and Spot
++    def test_item13_no_reservation_pool_not_counted(self):
++        self.f.pool_cfg["user"] = {"reservationAffinity": {"consumeReservationType": "NO_RESERVATION"}}
++        _, rep, _ = self.f.run()
++        r = row(rep, "k-a")
++        self.assertEqual(r["target"], 5)                        # system 4 + surge 1 only
++        self.assertTrue(any("user cannot consume" in n for n in r["notes"]))
++        self.assertNotIn("user", [u[0] for u in rep["uncovered"]])
++
++    def test_item13_specific_required_reservation_is_not_grown(self):
++        self.f.res[ZA][0]["specificReservationRequired"] = True
++        code, rep, prop = self.f.run()
++        self.assertEqual(code, 0)
++        self.assertEqual(row(rep, "k-a")["status"], "NOT_CONSUMABLE")
++        self.assertEqual(prop["k-a"]["instance_count"], 14)    # v1.1 grew it to 16
++        self.assertEqual(prop["k-b"]["instance_count"], 15)
++
++    def test_item13_specific_affinity_counts_only_for_named_reservation(self):
++        self.f.pool_cfg["user"] = {"reservationAffinity": {
++            "consumeReservationType": "SPECIFIC_RESERVATION", "key": "compute.googleapis.com/reservation-name",
++            "values": [f"projects/p/zones/{ZA}/reservations/res-a"]}}
++        _, rep, _ = self.f.run()
++        self.assertEqual(row(rep, "k-a")["target"], 16)         # user counted for res-a
++        self.assertEqual(row(rep, "k-b")["target"], 5)          # but not for res-b
++
++    def test_item13_spot_pool_not_counted(self):
++        self.f.pool_cfg["user"] = {"spot": True}
++        _, rep, _ = self.f.run()
++        self.assertEqual(row(rep, "k-a")["target"], 5)
++        self.assertTrue(any("Spot" in n for n in row(rep, "k-a")["notes"]))
++
++    # ---- minor: the result survives the pod (structured log line)
++    def test_result_logged_as_one_structured_line(self):
++        err = io.StringIO()
++        with contextlib.redirect_stderr(err):
++            self.f.run()
++        lines = [json.loads(x) for x in err.getvalue().splitlines() if x.startswith("{")]
++        result = next(x for x in lines if x["message"] == "sizer result")
++        ka = next(r for r in result["rows"] if r["key"] == "k-a")
++        self.assertEqual((ka["target"], ka["proposed"], ka["status"]), (16, 16, "INCREASE"))
++
++
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/terraform/sizer_access.tf b/terraform/sizer_access.tf
+index 8accb97..a608f0c 100644
+--- a/terraform/sizer_access.tf
++++ b/terraform/sizer_access.tf
+@@ -1,4 +1,4 @@
+-# reservation-sizer POC - identity and log access as Terraform (use this OR setup/02-access-gcloud.sh).
++# reservation-sizer POC - identity and log access as Terraform (use this OR setup/03-access-gcloud.sh).
+ # Drop into the workspace that owns project IAM (often the "prj" workspace). Nothing here is
+ # environment-specific: every value comes from the variables below.
+ 
+diff --git a/tests/__pycache__/test_ci_tools.cpython-313.pyc b/tests/__pycache__/test_ci_tools.cpython-313.pyc
+deleted file mode 100644
+index 389ff68..0000000
+Binary files a/tests/__pycache__/test_ci_tools.cpython-313.pyc and /dev/null differ
+diff --git a/tests/__pycache__/test_github_pr.cpython-313.pyc b/tests/__pycache__/test_github_pr.cpython-313.pyc
+deleted file mode 100644
+index 0022959..0000000
+Binary files a/tests/__pycache__/test_github_pr.cpython-313.pyc and /dev/null differ
+diff --git a/tests/test_ci_tools.py b/tests/test_ci_tools.py
+index dca038e..527a32e 100644
+--- a/tests/test_ci_tools.py
++++ b/tests/test_ci_tools.py
+@@ -2,6 +2,8 @@
+ 
+ import json
+ import os
++import re
++import shutil
+ import subprocess
+ import sys
+ import tempfile
+@@ -11,6 +13,8 @@ KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ CHECK = os.path.join(KIT, "ci", "check_reservation_change.py")
+ PLAN = os.path.join(KIT, "ci", "check_tf_plan.py")
+ HCL = os.path.join(KIT, "terraform", "hcl_map_to_json.py")
++GUARD_YML = os.path.join(KIT, "ci", "reservation-sizer-guard.yml")
++RENDER = os.path.join(KIT, "setup", "05-render-k8s.py")
+ 
+ BASE = {"node_pool_reservations": {
+     "k-a": {"enabled": True, "name": "res-a", "zone": "r1-a", "machine_type": "m-8", "instance_count": 14},
+@@ -27,6 +31,11 @@ def write(path, text):
+         f.write(text)
+ 
+ 
++def read_text(path):
++    with open(path) as f:
++        return f.read()
++
++
+ def load(path):
+     with open(path) as f:
+         return json.load(f)
+@@ -135,6 +144,25 @@ class PlanCheck(unittest.TestCase):
+         code, _ = self.plan([self.rc(["update"], {}, {"x": 1}, typ="google_project_iam_member", addr="x")])
+         self.assertEqual(code, 1)
+ 
++    def test_computed_after_apply_not_counted(self):
++        # v1.1 failed this real-world shape: status / in_use_count become "(known after apply)"
++        b = {"name": "res-a", "status": "READY", "specific_reservation": [{"count": 14, "in_use_count": 13}]}
++        a = {"name": "res-a", "specific_reservation": [{"count": 16}]}
++        rc = self.rc(["update"], b, a)
++        rc["change"]["after_unknown"] = {"status": True, "specific_reservation": [{"in_use_count": True}]}
++        code, out = self.plan([rc])
++        self.assertEqual(code, 0, out)
++        self.assertIn("computed after apply", out)
++
++    def test_known_change_still_rejected_next_to_unknowns(self):
++        b = {"name": "res-a", "status": "READY", "description": "x", "specific_reservation": [{"count": 14}]}
++        a = {"name": "res-a", "description": "y", "specific_reservation": [{"count": 15}]}
++        rc = self.rc(["update"], b, a)
++        rc["change"]["after_unknown"] = {"status": True}
++        code, out = self.plan([rc])
++        self.assertEqual(code, 1)
++        self.assertIn("description", out)
++
+ 
+ class HclConvert(unittest.TestCase):
+     def test_roundtrip_and_strip(self):
+@@ -176,5 +204,159 @@ other = 3
+         self.assertNotEqual(code, 0)
+ 
+ 
++def guard_script():
++    """The `run: |` block of the workflow, exactly as GitHub Actions would execute it."""
++    lines = read_text(GUARD_YML).splitlines()
++    i = next(n for n, line in enumerate(lines) if line.strip() == "run: |")
++    indent = len(lines[i + 1]) - len(lines[i + 1].lstrip())
++    body = []
++    for line in lines[i + 1:]:
++        if line.strip() and len(line) - len(line.lstrip()) < indent:
++            break
++        body.append(line[indent:])
++    return "\n".join(body) + "\n"
++
++
++def git(repo, *args):
++    subprocess.run(["git", "-C", repo, *args], check=True, capture_output=True, text=True)
++
++
++@unittest.skipUnless(shutil.which("git") and shutil.which("bash"), "needs git and bash")
++class GuardWorkflow(unittest.TestCase):
++    """Runs the guard's shell logic in a real git repo whose HEAD is a PR merge commit."""
++    TF = "ws/node_pool_reservations.auto.tfvars.json"
++
++    def setUp(self):
++        self.repo, self.tmp = tempfile.mkdtemp(), tempfile.mkdtemp()
++        git(self.repo, "init", "-q", "-b", "main")
++        git(self.repo, "config", "user.email", "t@example.com")
++        git(self.repo, "config", "user.name", "t")
++        os.makedirs(os.path.join(self.repo, "ci"))
++        os.makedirs(os.path.join(self.repo, "ws"))
++        shutil.copy(CHECK, os.path.join(self.repo, "ci", "check_reservation_change.py"))
++        dump(BASE, os.path.join(self.repo, self.TF))
++        write(os.path.join(self.repo, "README"), "v1\n")
++        git(self.repo, "add", "-A")
++        git(self.repo, "commit", "-qm", "base")
++
++    def pr(self, branch, files, main_moves=False):
++        git(self.repo, "checkout", "-q", "-b", branch)
++        for path, text in files.items():
++            write(os.path.join(self.repo, path), text)
++        git(self.repo, "commit", "-qam", "change")
++        git(self.repo, "checkout", "-q", "main")
++        if main_moves:   # someone merges to main after the PR was opened
++            write(os.path.join(self.repo, "README"), "v2\n")
++            git(self.repo, "commit", "-qam", "unrelated change on main")
++        git(self.repo, "checkout", "-q", "--detach", "main")
++        git(self.repo, "merge", "-q", "--no-ff", "--no-edit", branch)   # = refs/pull/N/merge
++
++    def run_guard(self, head_ref, title="t", labels="[]"):
++        env = dict(os.environ, HEAD_REF=head_ref, PR_TITLE=title, PR_LABELS=labels, TFVARS_PATH=self.TF,
++                   MAX_STEP="3", RUNNER_TEMP=self.tmp)
++        p = subprocess.run(["bash", "-c", guard_script()], cwd=self.repo, env=env, capture_output=True, text=True)
++        return p.returncode, p.stdout + p.stderr
++
++    def head(self, **counts):
++        h = json.loads(json.dumps(BASE))
++        for k, v in counts.items():
++            h["node_pool_reservations"][k.replace("_", "-")]["instance_count"] = v
++        return json.dumps(h)
++
++    def test_bot_pr_valid(self):
++        self.pr("reservation-sizer/pre-c1", {self.TF: self.head(k_a=16)})
++        code, out = self.run_guard("reservation-sizer/pre-c1")
++        self.assertEqual(code, 0, out)
++
++    def test_item6_checker_runs_from_base_not_from_the_pr(self):
++        tampered = "import sys\nprint('TAMPERED')\nsys.exit(0)\n"
++        self.pr("reservation-sizer/pre-c1", {self.TF: self.head(k_a=2), "ci/check_reservation_change.py": tampered})
++        code, out = self.run_guard("reservation-sizer/pre-c1")
++        self.assertNotEqual(code, 0, out)
++        self.assertNotIn("TAMPERED", out)
++        self.assertIn("ci/check_reservation_change.py", out)          # extra file reported by the base checker
++
++    def test_item6_main_moving_after_the_pr_is_not_blamed_on_it(self):
++        self.pr("reservation-sizer/pre-c1", {self.TF: self.head(k_a=16)}, main_moves=True)
++        code, out = self.run_guard("reservation-sizer/pre-c1")
++        self.assertEqual(code, 0, out)
++
++    def test_item6_needs_a_merge_commit(self):
++        code, out = self.run_guard("reservation-sizer/pre-c1")          # HEAD is a plain commit
++        self.assertNotEqual(code, 0)
++        self.assertIn("merge commit", out)
++
++    def test_item7_do_not_merge_label_fails(self):
++        self.pr("reservation-sizer/pre-c1", {self.TF: self.head(k_a=16)})
++        code, out = self.run_guard("reservation-sizer/pre-c1", labels='[\n  "reservation-sizer",\n  "do-not-merge"\n]')
++        self.assertEqual(code, 1, out)
++        self.assertIn("do-not-merge", out)
++
++    def test_item7_dry_run_title_fails_even_without_label(self):
++        self.pr("reservation-sizer/pre-c1", {self.TF: self.head(k_a=16)})
++        code, out = self.run_guard("reservation-sizer/pre-c1", title="[DRY RUN] reservation-sizer: pre/c1")
++        self.assertEqual(code, 1, out)
++
++    def test_human_pr_unrelated_passes(self):
++        self.pr("feature/x", {"README": "docs\n"})
++        code, out = self.run_guard("feature/x")
++        self.assertEqual(code, 0, out)
++        self.assertIn("nothing to check", out)
++
++    def test_human_pr_shape_change_only_warns(self):
++        h = json.loads(self.head())
++        h["node_pool_reservations"]["k-c"] = dict(BASE["node_pool_reservations"]["k-a"], zone="r1-c")
++        self.pr("feature/new-zone", {self.TF: json.dumps(h)})
++        code, out = self.run_guard("feature/new-zone")
++        self.assertEqual(code, 0, out)
++        self.assertIn("::warning::", out)
++
++    def test_title_is_never_executed(self):
++        self.pr("feature/x", {"README": "docs\n"})
++        code, out = self.run_guard("feature/x", title='$(touch pwned) `touch pwned2` "; exit 1')
++        self.assertEqual(code, 0, out)
++        self.assertFalse(os.path.exists(os.path.join(self.repo, "pwned")))
++        self.assertFalse(os.path.exists(os.path.join(self.repo, "pwned2")))
++
++    def test_workflow_triggers_and_env(self):
++        text = read_text(GUARD_YML)
++        self.assertRegex(text, r"types: \[[^\]]*labeled[^\]]*unlabeled")
++        self.assertIn("toJSON(github.event.pull_request.labels.*.name)", text)
++        self.assertNotRegex(guard_script(), r"\$\{\{")              # no expressions inside run:
++        try:
++            import yaml
++        except ImportError:
++            self.skipTest("PyYAML not installed")
++        doc = yaml.safe_load(text)
++        self.assertIn("labeled", doc[True]["pull_request"]["types"])     # YAML 1.1 reads `on` as True
++
++
++@unittest.skipUnless(os.path.exists(RENDER), "render script missing")
++class RenderManifests(unittest.TestCase):
++    def test_cronjob_has_pod_failure_policy(self):
++        d = tempfile.mkdtemp()
++        env = read_text(os.path.join(KIT, "config", "sizer.env.example"))
++        for k, v in {"PROJECT_ID": "p", "CLUSTER_NAME": "c1", "CLUSTER_LOCATION": "r1", "ENV_NAME": "pre",
++                     "SYSTEM_POOL": "system", "IMAGE": "reg/sizer:poc-1.2.0"}.items():
++            env = re.sub(rf'^{k}="[^"]*"', f'{k}="{v}"', env, flags=re.M)
++        write(os.path.join(d, "sizer.env"), env)
++        dump({"mode": "report", "pools": ["system"]}, os.path.join(d, "policy.json"))
++        code, out = run(RENDER, "--env", os.path.join(d, "sizer.env"), "--policy", os.path.join(d, "policy.json"),
++                        "--out", os.path.join(d, "out"))
++        self.assertEqual(code, 0, out)
++        cron = read_text(os.path.join(d, "out", "cronjob.yaml"))
++        self.assertIn("podFailurePolicy", cron)
++        try:
++            import yaml
++        except ImportError:
++            return
++        job = yaml.safe_load(cron)["spec"]["jobTemplate"]["spec"]
++        rule = job["podFailurePolicy"]["rules"][0]
++        self.assertEqual((rule["action"], rule["onExitCodes"]["values"]), ("FailJob", [2, 3, 4, 5]))
++        self.assertEqual(job["template"]["spec"]["restartPolicy"], "Never")   # required by podFailurePolicy
++        for name in os.listdir(os.path.join(d, "out")):
++            yaml.safe_load(read_text(os.path.join(d, "out", name)))                # every manifest parses
++
++
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/tests/test_github_pr.py b/tests/test_github_pr.py
+index 2ae613e..e0b045d 100644
+--- a/tests/test_github_pr.py
++++ b/tests/test_github_pr.py
+@@ -1,14 +1,18 @@
+-"""End-to-end test of sizer/github_pr.py against a local mock GitHub API (needs PyJWT[crypto]).
++"""End-to-end tests of sizer/github_pr.py against a local, stateful mock GitHub API (needs PyJWT[crypto]).
+ Run:  python3 -m unittest discover -s tests -v
+ """
+ 
+ import base64
+ import json
+ import os
++import ssl
+ import sys
++import tempfile
+ import threading
+ import unittest
++import urllib.parse
+ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
++from unittest import mock
+ 
+ KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ sys.path.insert(0, os.path.join(KIT, "sizer"))
+@@ -22,11 +26,25 @@ except ImportError:  # pragma: no cover
+     HAVE_JWT = False
+ 
+ REPO, PATH, BASE_SHA = "org/infra", "ws/node_pool_reservations.auto.tfvars.json", "base000"
++BRANCH = "reservation-sizer/pre-c1"
+ FILE = json.dumps({"node_pool_reservations": {"k": {"instance_count": 1}}})
+ 
+ 
++def content(n):
++    return json.dumps({"node_pool_reservations": {"k": {"instance_count": n}}})
++
++
+ class Mock(BaseHTTPRequestHandler):
+-    calls, state = [], {}
++    """Tiny in-memory GitHub: branches, commits, one file, PRs, labels, comments."""
++    calls = []
++    st = {}
++
++    @classmethod
++    def reset(cls):
++        cls.calls.clear()
++        cls.st.clear()
++        cls.st.update({"branches": {"main": {"sha": BASE_SHA, "file": FILE}}, "commits": {BASE_SHA: []},
++                       "prs": [], "comments": [], "n": 0, "labels_forbidden": False, "no_drafts": False})
+ 
+     def log_message(self, *a):
+         pass
+@@ -42,36 +60,63 @@ class Mock(BaseHTTPRequestHandler):
+     def _handle(self, method):
+         n = int(self.headers.get("Content-Length") or 0)
+         body = json.loads(self.rfile.read(n)) if n else None
+-        path = self.path.split("?")[0]
++        url = urllib.parse.urlparse(self.path)
++        path, q = urllib.parse.unquote(url.path), dict(urllib.parse.parse_qsl(url.query))
+         Mock.calls.append((method, path, body, self.headers.get("Authorization", "")))
+-        st = Mock.state
++        st, br = Mock.st, Mock.st["branches"]
++        r = f"/repos/{REPO}"
+         if method == "POST" and path.endswith("/access_tokens"):
+             return self._send(201, {"token": "inst-token"})
+-        if method == "GET" and path == f"/repos/{REPO}":
++        if method == "GET" and path == r:
+             return self._send(200, {"default_branch": "main"})
+-        if method == "GET" and path == f"/repos/{REPO}/git/ref/heads/main":
+-            return self._send(200, {"object": {"sha": BASE_SHA}})
+-        if method == "GET" and path.startswith(f"/repos/{REPO}/git/ref/heads/reservation-sizer/"):
+-            return self._send(200, {"object": {"sha": "old"}}) if st.get("branch") else self._send(404, {"message": "Not Found"})
+-        if method == "POST" and path == f"/repos/{REPO}/git/refs":
+-            st["branch"] = True
++        if method == "GET" and path.startswith(f"{r}/git/ref/heads/"):
++            name = path[len(f"{r}/git/ref/heads/"):]
++            return self._send(200, {"object": {"sha": br[name]["sha"]}}) if name in br else self._send(404, {"message": "Not Found"})
++        if method == "POST" and path == f"{r}/git/refs":
++            name = body["ref"][len("refs/heads/"):]
++            br[name] = {"sha": body["sha"], "file": br["main"]["file"]}
+             return self._send(201, {})
+-        if method == "PATCH" and "/git/refs/heads/" in path:
++        if method == "PATCH" and path.startswith(f"{r}/git/refs/heads/"):
++            name = path[len(f"{r}/git/refs/heads/"):]
++            br[name] = {"sha": body["sha"], "file": br["main"]["file"]}      # force reset to base
+             return self._send(200, {})
+-        if method == "GET" and path == f"/repos/{REPO}/contents/{PATH}":
+-            return self._send(200, {"content": base64.b64encode(FILE.encode()).decode(), "sha": "filesha"})
+-        if method == "PUT" and path == f"/repos/{REPO}/contents/{PATH}":
+-            st["written"] = base64.b64decode(body["content"]).decode()
++        if method == "GET" and path.startswith(f"{r}/git/commits/"):
++            sha = path.rsplit("/", 1)[-1]
++            return self._send(200, {"sha": sha, "parents": [{"sha": p} for p in st["commits"].get(sha, [])]})
++        if method == "GET" and path == f"{r}/contents/{PATH}":
++            f = br[q.get("ref", "main")]["file"]
++            return self._send(200, {"content": base64.b64encode(f.encode()).decode(), "sha": "filesha"})
++        if method == "PUT" and path == f"{r}/contents/{PATH}":
++            b = br[body["branch"]]
++            st["n"] += 1
++            new_sha = f"c{st['n']}"
++            st["commits"][new_sha] = [b["sha"]]
++            b.update(sha=new_sha, file=base64.b64decode(body["content"]).decode())
+             return self._send(200, {})
+-        if method == "GET" and path == f"/repos/{REPO}/pulls":
+-            return self._send(200, [{"number": 7, "html_url": "http://pr/7"}] if st.get("pr") else [])
+-        if method == "POST" and path == f"/repos/{REPO}/pulls":
+-            st["pr"] = True
+-            return self._send(201, {"number": 7, "html_url": "http://pr/7"})
+-        if method == "PATCH" and path == f"/repos/{REPO}/pulls/7":
+-            return self._send(200, {"number": 7, "html_url": "http://pr/7"})
+-        if method == "POST" and path == f"/repos/{REPO}/issues/7/labels":
+-            return self._send(403, {"message": "Resource not accessible by integration"})  # must be non-fatal
++        if method == "GET" and path == f"{r}/pulls":
++            head = q.get("head", "").split(":", 1)[-1]
++            return self._send(200, [p for p in st["prs"] if p["head"] == head and p["state"] == "open"])
++        if method == "POST" and path == f"{r}/pulls":
++            if body.get("draft") and st["no_drafts"]:
++                return self._send(422, {"message": "Draft pull requests are not supported in this repository."})
++            num = 7 + len(st["prs"])
++            pr = {"number": num, "html_url": f"http://pr/{num}", "head": body["head"], "state": "open",
++                  "draft": bool(body.get("draft")), "title": body["title"], "body": body["body"], "labels": []}
++            st["prs"].append(pr)
++            return self._send(201, pr)
++        if method == "PATCH" and path.startswith(f"{r}/pulls/"):
++            pr = next(p for p in st["prs"] if p["number"] == int(path.rsplit("/", 1)[-1]))
++            pr.update({k: v for k, v in body.items() if k in ("title", "body", "state")})
++            return self._send(200, pr)
++        if method == "POST" and path.endswith("/labels"):
++            if st["labels_forbidden"]:
++                return self._send(403, {"message": "Resource not accessible by integration"})  # must be non-fatal
++            pr = next(p for p in st["prs"] if p["number"] == int(path.split("/")[-2]))
++            pr["labels"] += [{"name": x} for x in body["labels"]]
++            return self._send(200, pr["labels"])
++        if method == "POST" and path.endswith("/comments"):
++            st["comments"].append((int(path.split("/")[-2]), body["body"]))
++            return self._send(201, {})
+         return self._send(500, {"message": f"unexpected {method} {path}"})
+ 
+     def do_GET(self):
+@@ -87,6 +132,10 @@ class Mock(BaseHTTPRequestHandler):
+         self._handle("PATCH")
+ 
+ 
++def calls(method, prefix):
++    return [c for c in Mock.calls if c[0] == method and c[1].startswith(prefix)]
++
++
+ @unittest.skipUnless(HAVE_JWT, "PyJWT[crypto] not installed")
+ class GitHubPrTest(unittest.TestCase):
+     @classmethod
+@@ -107,38 +156,117 @@ class GitHubPrTest(unittest.TestCase):
+         cls.srv.server_close()
+ 
+     def setUp(self):
+-        Mock.calls.clear()
+-        Mock.state.clear()
++        Mock.reset()
+         import github_pr
+-        self.gh_mod = github_pr
++        self.m = github_pr
++        self.gh = github_pr.GitHub.from_app(self.api, "123", "456", self.pem, repo=REPO)
++
++    def raise_pr(self, n, draft=False, body="body", title=None):
++        title = title or (("[DRY RUN] " if draft else "") + "reservation-sizer: pre/c1 increase reservations")
++        labels = ["reservation-sizer"] + (["do-not-merge"] if draft else [])
++        return self.gh.raise_pr(REPO, None, PATH, content(n), body, branch=BRANCH, title=title, draft=draft, labels=labels)
++
++    def open_prs(self):
++        return [p for p in Mock.st["prs"] if p["state"] == "open"]
+ 
+     def test_token_is_down_scoped_and_pr_flow(self):
+-        gh = self.gh_mod.GitHub.from_app(self.api, "123", "456", self.pem, repo=REPO)
+         method, path, body, auth = Mock.calls[0]
+         self.assertEqual(path, "/app/installations/456/access_tokens")
+         self.assertEqual(body["repositories"], ["infra"])
+         self.assertEqual(body["permissions"], {"contents": "write", "pull_requests": "write"})
+         self.assertTrue(auth.startswith("Bearer ey"))                       # signed App JWT
+-
+-        new = json.dumps({"node_pool_reservations": {"k": {"instance_count": 3}}})
+-        url = gh.raise_pr(REPO, None, PATH, new, "body", branch="reservation-sizer/pre-c1",
+-                          title="t", draft=True, labels=["reservation-sizer", "do-not-merge"])
++        Mock.st["labels_forbidden"] = True                                   # labels failing is non-fatal
++        url = self.raise_pr(3, draft=True)
+         self.assertEqual(url, "http://pr/7")
+-        self.assertEqual(Mock.state["written"], new)
+-        pr_post = [c for c in Mock.calls if c[0] == "POST" and c[1] == f"/repos/{REPO}/pulls"][0]
+-        self.assertTrue(pr_post[2]["draft"])
++        self.assertEqual(Mock.st["branches"][BRANCH]["file"], content(3))
++        self.assertTrue(Mock.st["prs"][0]["draft"])
+         self.assertTrue(all(c[3] == "Bearer inst-token" for c in Mock.calls[1:]))
+-        writes = [c for c in Mock.calls if c[0] in ("PUT",)]
+-        self.assertEqual(len(writes), 1)                                     # exactly one file committed
++        self.assertEqual(len(calls("PUT", f"/repos/{REPO}/contents/")), 1)  # exactly one file committed
+ 
+-        # second run: branch exists -> force-reset to base, PR updated not duplicated
++    def test_changed_content_resets_branch_and_updates_same_pr(self):
++        self.raise_pr(3)
+         Mock.calls.clear()
+-        gh.raise_pr(REPO, "main", PATH, new, "body2", branch="reservation-sizer/pre-c1",
+-                    title="t", draft=True, labels=[])
+-        reset = [c for c in Mock.calls if c[0] == "PATCH" and "/git/refs/heads/" in c[1]][0]
+-        self.assertEqual(reset[2], {"sha": BASE_SHA, "force": True})
+-        self.assertFalse([c for c in Mock.calls if c[0] == "POST" and c[1] == f"/repos/{REPO}/pulls"])
+-        self.assertTrue([c for c in Mock.calls if c[0] == "PATCH" and c[1] == f"/repos/{REPO}/pulls/7"])
++        self.raise_pr(4, body="body2")
++        self.assertEqual(calls("PATCH", f"/repos/{REPO}/git/refs/heads/")[0][2], {"sha": BASE_SHA, "force": True})
++        self.assertEqual(len(calls("PUT", f"/repos/{REPO}/contents/")), 1)
++        self.assertFalse(calls("POST", f"/repos/{REPO}/pulls"))            # updated, not duplicated
++        self.assertEqual(Mock.st["prs"][0]["body"], "body2")
++        self.assertEqual(Mock.st["branches"][BRANCH]["file"], content(4))
++
++    # ---- item 9: unchanged content -> no push (no CI re-run, approvals keep their meaning)
++    def test_item9_unchanged_content_is_not_pushed_again(self):
++        self.raise_pr(3)
++        Mock.calls.clear()
++        self.raise_pr(3, body="evidence of today")
++        self.assertFalse(calls("PATCH", f"/repos/{REPO}/git/refs/heads/"))
++        self.assertFalse(calls("PUT", f"/repos/{REPO}/contents/"))
++        self.assertEqual(Mock.st["prs"][0]["body"], "evidence of today")   # body still refreshed
++
++    def test_item9_base_moved_means_push_even_if_content_same(self):
++        self.raise_pr(3)
++        Mock.st["branches"]["main"]["sha"] = "base001"                     # main moved on
++        Mock.st["commits"]["base001"] = [BASE_SHA]
++        Mock.calls.clear()
++        self.raise_pr(3)
++        self.assertEqual(calls("PATCH", f"/repos/{REPO}/git/refs/heads/")[0][2]["sha"], "base001")
++
++    def test_item9_close_bot_pr(self):
++        self.raise_pr(3)
++        url = self.gh.close_bot_pr(REPO, BRANCH, "no increase is needed any more")
++        self.assertEqual(url, "http://pr/7")
++        self.assertEqual(Mock.st["prs"][0]["state"], "closed")
++        self.assertEqual(Mock.st["comments"], [(7, "no increase is needed any more")])
++        self.assertIsNone(self.gh.close_bot_pr(REPO, BRANCH, "again"))     # nothing open -> no-op
++
++    # ---- item 8: a dry-run PR never silently becomes the live PR (and vice versa)
++    def test_item8_switch_dry_run_to_live_replaces_the_pr(self):
++        self.raise_pr(3, draft=True)
++        self.raise_pr(3, draft=False)
++        old, new = Mock.st["prs"]
++        self.assertEqual(old["state"], "closed")
++        self.assertIn("mode changed to live", Mock.st["comments"][0][1])
++        self.assertEqual(new["state"], "open")
++        self.assertFalse(new["draft"])
++        self.assertFalse(new["title"].startswith("[DRY RUN]"))
++        self.assertNotIn("do-not-merge", [x["name"] for x in new["labels"]])
++
++    def test_item8_switch_live_to_dry_run_replaces_the_pr(self):
++        self.raise_pr(3)
++        self.raise_pr(3, draft=True)
++        self.assertEqual([p["state"] for p in Mock.st["prs"]], ["closed", "open"])
++        self.assertTrue(self.open_prs()[0]["draft"])
++
++    def test_item8_dry_run_detected_by_title_or_label(self):
++        self.assertTrue(self.m.is_dry_run_pr({"draft": False, "title": "[DRY RUN] x", "labels": []}))
++        self.assertTrue(self.m.is_dry_run_pr({"draft": False, "title": "x", "labels": [{"name": "do-not-merge"}]}))
++        self.assertFalse(self.m.is_dry_run_pr({"draft": False, "title": "x", "labels": [{"name": "reservation-sizer"}]}))
++
++    # ---- item 7: no drafts on this repo -> a normal PR that is still marked as dry run
++    def test_item7_draft_fallback_keeps_dry_run_markers(self):
++        Mock.st["no_drafts"] = True
++        self.raise_pr(3, draft=True)
++        pr = self.open_prs()[0]
++        self.assertFalse(pr["draft"])
++        self.assertTrue(pr["title"].startswith("[DRY RUN] "))
++        self.assertIn("do-not-merge", [x["name"] for x in pr["labels"]])
++        Mock.calls.clear()
++        self.raise_pr(3, draft=True)                                       # still recognised as dry-run:
++        self.assertEqual(len(Mock.st["prs"]), 1)                            # no close/re-open churn
++
++    # ---- item 4: the corporate CA bundle is added to the public roots
++    def test_item4_ssl_context_keeps_public_roots(self):
++        sys.path.insert(0, os.path.join(KIT, "sizer", "tests"))
++        from test_sizer import TEST_CA_PEM
++        d = tempfile.mkdtemp()
++        pem = os.path.join(d, "corp.pem")
++        with open(pem, "w") as fh:
++            fh.write(TEST_CA_PEM)
++        orig = ssl.SSLContext.load_default_certs
++        with mock.patch.object(ssl.SSLContext, "load_default_certs", autospec=True, side_effect=orig) as m:
++            ctx = self.m.ssl_context(pem)
++        self.assertTrue(m.called)
++        self.assertIn("Test Corporate Root CA",
++                      [dict(x[0] for x in c["subject"]).get("commonName") for c in ctx.get_ca_certs()])
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/tests/test_preflight.py b/tests/test_preflight.py
+new file mode 100644
+index 0000000..d6f9333
+--- /dev/null
++++ b/tests/test_preflight.py
+@@ -0,0 +1,72 @@
++"""Offline smoke tests for setup/preflight.py (fixture data instead of Google APIs).
++Run:  python3 -m unittest discover -s tests -v
++"""
++
++import contextlib
++import io
++import json
++import os
++import sys
++import unittest
++from unittest import mock
++
++KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++sys.path.insert(0, os.path.join(KIT, "sizer"))
++sys.path.insert(0, os.path.join(KIT, "sizer", "tests"))
++sys.path.insert(0, os.path.join(KIT, "setup"))
++
++import reservation_sizer as rs  # noqa: E402
++import preflight  # noqa: E402
++from test_sizer import NOW, REGION, ZA, ZB, Fix, scale_up_decision, stockout_error  # noqa: E402
++
++
++class PreflightSmoke(unittest.TestCase):
++    def setUp(self):
++        self.f = Fix()
++        self.f.node_metric = True
++
++    def tearDown(self):
++        self.f.cleanup()
++
++    def run_preflight(self):
++        self.f.write()
++        path = os.path.join(self.f.dir, "cluster.json")
++        with open(path) as fh:
++            cl = json.load(fh)
++        cl.update(loggingService="logging.googleapis.com/kubernetes",
++                  workloadIdentityConfig={"workloadPool": "p.svc.id.goog"})
++        with open(path, "w") as fh:
++            json.dump(cl, fh)
++        preflight.BLOCKERS.clear()
++        preflight.WARNINGS.clear()
++        argv = ["preflight.py", "--project", "p", "--location", REGION, "--cluster", "c1",
++                "--policy", os.path.join(self.f.dir, "policy.json"),
++                "--tfvars-file", os.path.join(self.f.dir, "tfvars.json")]
++        out = io.StringIO()
++        with mock.patch.object(rs, "Gcp", lambda p, l, c, h, t: rs.FixtureGcp(self.f.dir, c)), \
++                mock.patch.object(rs.time, "time", return_value=rs.parse_ts(NOW)), \
++                mock.patch.object(sys, "argv", argv), \
++                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
++            code = preflight.main()
++        return code, out.getvalue()
++
++    def test_runs_clean_and_judges_node_metric_coverage_per_cluster(self):
++        self.f.value_fns[("user", ZB)] = lambda t: 0          # pool idle at 0 nodes in zone b: not a blocker
++        code, out = self.run_preflight()
++        self.assertEqual(code, 0, out)
++        self.assertIn("node-metric cluster: coverage 100%", out)
++        self.assertIn(f"user/{ZB}: buckets with nodes 0/", out)
++
++    def test_ambiguous_stockouts_and_auto_provisioned_pools_are_warned(self):
++        self.f.pool_extra["tenant"] = {"autoscaling": {"enabled": True, "autoprovisioned": True}}
++        self.f.logs = [stockout_error("2026-11-02T10:01:00Z", "e9", "opaque-id"),
++                       scale_up_decision("2026-11-02T10:00:00Z", "e9", ("user", ZA), ("user", ZB))]
++        code, out = self.run_preflight()                      # v1.1: KeyError, preflight crashed
++        self.assertEqual(code, 0, out)
++        self.assertIn("without the failing MIG", out)
++        self.assertIn("auto-provisioned pools present", out)
++        self.assertIn("tenant", out)
++
++
++if __name__ == "__main__":
++    unittest.main()
