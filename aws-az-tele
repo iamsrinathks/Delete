@@ -1,0 +1,149 @@
+Here are the console steps for the recommended setup: **CloudWatch → Firehose → S3**, then a **twice-daily Lambda that pushes to Blob** with no stored secrets. I wrote the Lambda code for you (`lambda_function.py`). It uses only what's built into Lambda's Python runtime, so you can paste it straight into the console editor. I ran it against stand-in AWS and Azure endpoints and it copied, skipped and resumed correctly; it hasn't touched the real services yet.
+
+Use the **same AWS region** as your log group throughout. Placeholders are in `<ANGLE_BRACKETS>`.
+
+## Part 1: AWS, CloudWatch Logs → S3
+
+**1. Create the staging bucket (S3 console)**
+- Click **Create bucket**, name it e.g. `cc-telemetry-staging-<ACCOUNT_ID>`, keep **Block all public access** on, and keep SSE-S3 encryption.
+- Go to **Management → Create lifecycle rule** and expire objects after 14 days. Blob keeps the long-term copy; this just leaves time for retries.
+
+**2. Create the Firehose stream (Amazon Data Firehose console → Create Firehose stream)**
+- Set **Source** to *Direct PUT*, **Destination** to *Amazon S3*, and the name to `cc-telemetry-to-s3`.
+- Under **Transform records**, turn on **decompression** (CloudWatch Logs) and then **message extraction**. This strips the CloudWatch wrapper so you get raw Claude Code events.
+- Under **Destination settings**:
+  - Choose your bucket and set **New line delimiter** to *Enabled*, so each event is one line for Snowflake.
+  - Set the **S3 bucket prefix** to `claude-code/` (Firehose adds `YYYY/MM/DD/HH/` in UTC) and the error output prefix to `errors/`.
+- **Buffer hints**: set the interval to 900 s, the maximum, for fewer and larger files.
+- **Compression**: choose GZIP. AWS's docs don't say whether GZIP is allowed with decompression on. If the console blocks it, leave compression off.
+
+**3. Create the role CloudWatch Logs uses to write to Firehose (IAM → Roles → Create role → Custom trust policy)**
+
+Trust policy:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": { "Service": "logs.amazonaws.com" },
+    "Action": "sts:AssumeRole",
+    "Condition": { "ArnLike": { "aws:SourceArn": "arn:aws:logs:<REGION>:<ACCOUNT_ID>:*" } }
+  }]
+}
+```
+Inline permissions policy (name the role `CWLtoFirehoseRole`):
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["firehose:PutRecord"],
+    "Resource": "arn:aws:firehose:<REGION>:<ACCOUNT_ID>:deliverystream/cc-telemetry-to-s3"
+  }]
+}
+```
+
+**4. Add the subscription filter (CloudWatch → Log groups → your group → Subscription filters tab → Create)**
+- Choose the **Firehose** option, pick `cc-telemetry-to-s3` and `CWLtoFirehoseRole`, leave the filter pattern **blank** (all events) and name it.
+- Log groups allow only a few subscription filters. If you hit the limit, an existing one has to go.
+
+**5. Test hop 1**
+- Generate some events by running Claude Code with telemetry on.
+- Within about 15 minutes, `claude-code/YYYY/MM/DD/HH/` objects should appear in S3. Download one and check it has one JSON event per line.
+- If nothing appears, look at the stream's **Monitoring** tab and the `errors/` prefix.
+
+## Part 2: AWS, identity for the copy job
+
+**6. Turn on outbound identity federation (IAM → Account settings, under Access management)**
+- Enable **outbound identity federation** and **copy the issuer URL**. It's specific to your account and Azure needs it exactly.
+
+**7. Create the Lambda (Lambda → Create function → Author from scratch)**
+- Name it `cc-telemetry-s3-to-blob`, choose **Python 3.13**, and pick *Create a new role with basic Lambda permissions*.
+- Go to **Configuration → Permissions**, open the role and **copy its ARN** (you need it in step 11).
+- On the role, choose **Add permissions → Create inline policy → JSON**:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "ListStaging", "Effect": "Allow", "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::<BUCKET>",
+      "Condition": { "StringLike": { "s3:prefix": "claude-code/*" } } },
+    { "Sid": "ReadStaging", "Effect": "Allow", "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::<BUCKET>/claude-code/*" },
+    { "Sid": "TokenForAzure", "Effect": "Allow", "Action": "sts:GetWebIdentityToken",
+      "Resource": "*",
+      "Condition": {
+        "ForAllValues:StringEquals": { "sts:IdentityTokenAudience": "api://AzureADTokenExchange" },
+        "NumericLessThanEquals": { "sts:DurationSeconds": 300 } } }
+  ]
+}
+```
+
+## Part 3: Azure portal
+
+**8. Set up the storage account and container**
+- Create or reuse a StorageV2 account and add a **private** container, e.g. `claude-code-landing`.
+- **Firewall:** if the account only allows *selected networks*, Lambda's public IP isn't fixed. Either allow public access for the trial, or later run the Lambda in a VPC with a NAT gateway and an Elastic IP, and allow that IP.
+- Optional: set **Configuration → Allow storage account key access** to *Disabled*, since nothing uses keys.
+
+**9. Create the user-assigned managed identity (Managed Identities → Create)**
+- Name it e.g. `mi-cc-telemetry-writer`.
+- Copy its **Client ID**, and your **Tenant ID** from the Microsoft Entra ID overview page.
+
+**10. Grant write access on the container (container → Access control (IAM) → Add role assignment)**
+- Choose **Storage Blob Data Contributor**, then **Members**: *Managed identity* → your identity → **Review + assign**.
+- It can take 10–30 minutes to take effect.
+
+**11. Add the federated credential (the managed identity → Settings → Federated credentials → Add credential)**
+- Set **Federated credential scenario** to *Other issuer*.
+- **Issuer**: the AWS issuer URL from step 6, exactly.
+- **Subject identifier**: the Lambda role ARN from step 7.
+- **Audience**: `api://AzureADTokenExchange`, the default. **Name**: e.g. `aws-lambda-cc-telemetry`.
+- Wait a few minutes before testing. Very early token requests can fail with `AADSTS70021`.
+
+## Part 4: AWS, deploy and schedule
+
+**12. Deploy the code**
+- In **Lambda → Code**, paste in `lambda_function.py` and click **Deploy**.
+- Under **Configuration → General**, set the timeout to **15 min** and memory to **1024 MB**.
+- Under **Configuration → Environment variables**, add:
+  - `SOURCE_BUCKET`
+  - `SOURCE_PREFIX` = `claude-code/`
+  - `AZURE_TENANT_ID`
+  - `AZURE_CLIENT_ID`
+  - `AZURE_STORAGE_ACCOUNT`
+  - `AZURE_CONTAINER`
+  - `LOOKBACK_DAYS` = `2`
+
+**13. Test (Test tab, event `{}`)**
+- In the logs, check:
+  - `botocore` is **1.41.0 or later**. That's the first release with the token call; I checked this against the releases on PyPI.
+  - `AWS token claims: iss=… sub=…` **exactly match** what you entered in step 11.
+  - The result line shows `copied: N`.
+- Run it again. You should get `copied: 0` and `skipped_existing: N`, which shows re-runs are safe.
+
+**14. Schedule it (EventBridge Scheduler → Create schedule)**
+- Choose *Recurring schedule → Cron-based* with `cron(0 2,14 * * ? *)` and time zone **Europe/London**. That runs at 02:00 and 14:00.
+- Set the **Flexible time window** to *Off* or 15 min.
+- Set the **Target** to *AWS Lambda Invoke*, choose your function, with payload `{}`.
+- Under **Permissions**, choose *Create new role for this schedule*.
+- Optional: a CloudWatch alarm on the function's **Errors ≥ 1**. The function fails on purpose if any file fails to copy, so the alarm catches it.
+
+**15. Check in Azure:** under **Containers → claude-code-landing → claude-code/YYYY/MM/DD/HH/**, the file sizes should match S3. Then set the Snowflake `COPY` task to run about an hour after each Lambda run.
+
+## If something fails
+
+| Error | Fix |
+|---|---|
+| `OutboundWebIdentityFederationDisabled` | Step 6 wasn't done in this account |
+| `get_web_identity_token` missing, or botocore < 1.41.0 | Add a Lambda layer with a newer boto3 |
+| `AccessDenied` on GetWebIdentityToken | The audience in the inline policy doesn't match the one in the code |
+| `AADSTS70021` | Issuer, subject or audience don't match the logged claims, or the credential is too new; wait and retry |
+| `AADSTS700016` | Wrong client ID or tenant ID |
+| Blob `403 AuthorizationPermissionMismatch` | The role assignment is missing or still taking effect |
+| Blob `403 AuthorizationFailure` | The storage firewall is blocking the Lambda (step 8) |
+
+AWS's docs didn't give the exact console wording for the Firehose subscription-filter button or the message-extraction toggle. Small label differences in those two places are expected.
+
+Files are in /mnt/user-data/outputs:
+- lambda_function.py
